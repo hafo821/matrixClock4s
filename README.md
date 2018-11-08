@@ -1,4 +1,6 @@
 # matrixClock4s
+
+YAEC-4 (Yet Another Esp8266 Clock with 4 "segments" of dot matrix 8x8 display)  
 Dot matrix clock with 4 segments, NTP, WiFi manager and support for daylight saving and LDR backlight adjustment
 ---
 

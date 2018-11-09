@@ -26,6 +26,7 @@ char mqtt_user[40] = "";
 char mqtt_password[40] = "";
 char mqtt_messageTopic[40] = "";
 char ntp_server[40] = "";
+char offline_mode[40] = "";
 
 //LED matrix definition
 // Define the ChipSelect pin for the led matrix (Dont use the SS or MISO pin of your Arduino!)
@@ -140,10 +141,10 @@ char text[] = "0000";                     // display text holder
 int len = strlen(text);                   // length of text holder
 time_t prevDisplay = 0;                   // when the digital clock was displayed
 const int NTP_PACKET_SIZE = 48;           // NTP time is in the first 48 bytes of message
-byte packetBuffer[NTP_PACKET_SIZE];       //buffer to hold incoming & outgoing packets
+byte packetBuffer[NTP_PACKET_SIZE];       // buffer to hold incoming & outgoing packets
 int WiFireconnectCounter = 0;             // counter for WiFi reconnection
 int MQTTreconnectCounter = 0;             // counter for MQTT reconnection
-
+int intensity = 0;                        // intensity of display backlight
 //-------------------------------------------------------------------------------------------
 void setup()
 {
@@ -201,10 +202,9 @@ void setup()
   pinMode(A0,INPUT);
 }
 
-int intensity;
 void loop() {
   mqtt.loop();
-  if  (!mqtt.connected()) {
+  if  (!mqtt.connected() && offline_mode[0] == '0' && offline_mode[1] == 'F' && offline_mode[2] == 'F') {
     Serial.println("mqtt dead");
     drawString("OFFL", 4, 0, 0);
     lmd.display();
@@ -246,7 +246,6 @@ void loop() {
     else {
       boolSwitch = false;
     }
-    // Serial.println();
   }
   else {
     // display time
@@ -508,6 +507,7 @@ void reconnectWiFi(void) {
           strcpy(mqtt_password, json["mqtt_password"]);
           strcpy(mqtt_messageTopic, json["mqtt_messageTopic"]);
           strcpy(ntp_server, json["ntp_server"]);
+          strcpy(offline_mode, json["offline_mode"]);
 
         } else {
           Serial.println("failed to load json config");
@@ -528,6 +528,8 @@ void reconnectWiFi(void) {
   WiFiManagerParameter custom_mqtt_password("password", "mqtt password", mqtt_password, 40);
   WiFiManagerParameter custom_mqtt_messageTopic("message topic", "message topic", mqtt_messageTopic, 40);
   WiFiManagerParameter custom_ntp_server("ntp server", "ntp server", ntp_server, 40);
+  WiFiManagerParameter custom_offline_mode("offline mode", "offline mode", offline_mode, 40);
+
   WiFiManager wifiManager;
 
   //set config save notify callback
@@ -536,12 +538,22 @@ void reconnectWiFi(void) {
   //add all your parameters here
   wifiManager.addParameter(&custom_mqtt_server);
   wifiManager.addParameter(&custom_mqtt_port);
+  wifiManager.addParameter(&custom_mqtt_user);
+  wifiManager.addParameter(&custom_mqtt_password);
+  wifiManager.addParameter(&custom_mqtt_messageTopic);
+  wifiManager.addParameter(&custom_ntp_server);
+  wifiManager.addParameter(&custom_offline_mode);
 
   wifiManager.autoConnect("MatrixClock");
 
   //read updated parameters
   strcpy(mqtt_server, custom_mqtt_server.getValue());
   strcpy(mqtt_port, custom_mqtt_port.getValue());
+  strcpy(mqtt_user, custom_mqtt_user.getValue());
+  strcpy(mqtt_password, custom_mqtt_password.getValue());
+  strcpy(mqtt_messageTopic, custom_mqtt_messageTopic.getValue());
+  strcpy(ntp_server, custom_ntp_server.getValue());
+ // strcpy(offline_mode, custom_offline_mode.getValue());
 
   //save the custom parameters to FS
   if (shouldSaveConfig) {
@@ -554,6 +566,7 @@ void reconnectWiFi(void) {
     json["mqtt_password"] = mqtt_password;
     json["mqtt_messageTopic"] = mqtt_messageTopic;
     json["ntp_server"] = ntp_server;
+    json["offline_mode"] = offline_mode;
 
     File configFile = SPIFFS.open("/config.json", "w");
     if (!configFile) {
@@ -580,7 +593,7 @@ void reconnectWiFi(void) {
 // reconnect to MQTT
 void reconnectMQTT(void) {
   // Loop until we're reconnected
-  while (!mqtt.connected()) {
+  while (!mqtt.connected() && offline_mode[0] == '0' && offline_mode[1] == 'F' && offline_mode[2] == 'F') {
     Serial.print("*");
     String client_ID = "ESP-";
     client_ID += long(ESP.getChipId());

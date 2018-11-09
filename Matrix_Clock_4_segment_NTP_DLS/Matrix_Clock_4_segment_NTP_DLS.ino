@@ -16,6 +16,8 @@
 #include "TimerObject.h"         //https://playground.arduino.cc/Code/ArduinoTimerObject
 #include <LEDMatrixDriver.hpp>   //https://github.com/bartoszbielawski/LEDMatrixDriver/blob/master/src/LEDMatrixDriver.hpp
 
+#define DEBUG 0 // if 1, more output will appear on Serial
+
 // values for WiFiManager setup
 // define your default values here, if there are different values in config.json, they are overwritten.
 char mqtt_server[40] = "";
@@ -43,7 +45,7 @@ Timezone CE(CEST, CET);
 // DISPLAY SPEED
 const int ANIM_DELAY = 80;      // marquee animation speed
 const int DOT_DELAY = 500;      // dot blink speed
-const int SWITCH_DELAY = 5000;  // switch between time and marquee speed
+//const int SWITCH_DELAY = 5000;  // switch between time and marquee speed
 const int REPETITIONS = 2;      // number of marquee repetition
 
 // This is the font definition. You can use http://gurgleapps.com/tools/matrix to create your own font or sprites.
@@ -118,7 +120,7 @@ WiFiClient espClient;
 PubSubClient mqtt(espClient);
 // Create timer object, init with time, callback and singleshot=false
 TimerObject *timerDot = new TimerObject(DOT_DELAY, &updateDot, false);
-TimerObject *timerSwitch = new TimerObject(SWITCH_DELAY, &updateSwitch, false);
+//TimerObject *timerSwitch = new TimerObject(SWITCH_DELAY, &updateSwitch, false);
 TimerObject *timerMarquee = new TimerObject(ANIM_DELAY, &updateMarquee, false);
 
 // variables
@@ -133,7 +135,7 @@ bool boolSwitch  = false;                 // time/marquee switch flag
 bool boolMarquee  = false;                // marquee animation flag
 int h = 00;                               // actual hour
 int m = 00;                               // actual minute
-int s = 00;                               // actual second                        
+int s = 00;                               // actual second
 char text[] = "0000";                     // display text holder
 int len = strlen(text);                   // length of text holder
 time_t prevDisplay = 0;                   // when the digital clock was displayed
@@ -194,12 +196,13 @@ void setup()
   delay(1000);
 
   timerDot->Start();
-  timerSwitch->Start();
+  //timerSwitch->Start();
   timerMarquee->Start();
+  pinMode(A0,INPUT);
 }
 
-void loop()
-{
+int intensity;
+void loop() {
   mqtt.loop();
   if  (!mqtt.connected()) {
     Serial.println("mqtt dead");
@@ -207,18 +210,15 @@ void loop()
     lmd.display();
     reconnectMQTT();
   }
-
-  //  lmd.setIntensity(map(analogRead(A0), 0, 1023, 0, 10)); // 0 = low, 10 = high
-
   String textStr = "";
 
   if (boolSwitch == true) {
-    // zobrazuj marquee
-    int intensity = map(analogRead(A0), 0, 1023, 0, 10) + 2;
+    // display marquee
+    intensity += 2;
     if (intensity > 10)
       intensity = 10;
 
-    //  lmd.setIntensity(intensity); // 0 = low, 10 = high
+    lmd.setIntensity(intensity); // 0 = low, 10 = high
 
     drawString("    ", 4, 0, 0);
     lmd.display();
@@ -249,7 +249,7 @@ void loop()
     // Serial.println();
   }
   else {
-    //zobrazuj čas
+    // display time
     if (timeStatus() != timeNotSet) {
       if (now() != prevDisplay) { //update the display only if time has changed
         prevDisplay = now();
@@ -271,13 +271,13 @@ void loop()
         for (int i = 0; i < 4; i++) {
           text[i] = textStr[i];
         }
-
         drawString(text, len, 0, 0);
       }
     }
     if (boolDot == true) {
       boolDot = false;
-      Serial.println("--DOT--");
+      if (DEBUG)
+        Serial.println("--DOT--");
       if (dot == 0) {
         lmd.setPixel(15, 1, true);
         lmd.setPixel(15, 2, true);
@@ -292,6 +292,8 @@ void loop()
         lmd.setPixel(15, 6, false);
         dot = 0;
       }
+      intensity = map(analogRead(A0), 0, 1023, 0, 10);
+      lmd.setIntensity(intensity);
       lmd.display();
     }
   }
@@ -307,7 +309,8 @@ void updateDot(void) {
 //switch timer callback
 void updateSwitch(void) {
   boolSwitch = true;
-  Serial.println("--MARQUEE--");
+  if (DEBUG)
+    Serial.println("--MARQUEE--");
 }
 
 //marquee timer callback
@@ -336,9 +339,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.println();
   if (top == "owar/matrixdisplay/message") {
     for (int i = 0; i < length; i++) {
-      Serial.print((char)payload[i]);
       message[i] = (char)payload[i];
     }
+    updateSwitch();
   }
   delay(100);
 }
@@ -384,7 +387,7 @@ void printDigits(int digits) {
 }
 
 // NTP time getter
-time_t getNtpTime(){
+time_t getNtpTime() {
   while (Udp.parsePacket() > 0) ; // discard any previously received packets
   Serial.println("Transmit NTP Request");
   sendNTPpacket();
@@ -410,7 +413,7 @@ time_t getNtpTime(){
 }
 
 // send an NTP request to the time server at the given address
-void sendNTPpacket(void){
+void sendNTPpacket(void) {
   // set all bytes in the buffer to 0
   memset(packetBuffer, 0, NTP_PACKET_SIZE);
   // Initialize values needed to form NTP request
@@ -432,7 +435,7 @@ void sendNTPpacket(void){
 }
 
 // draw string to matrix display buffer
-void drawString(char* text, int len, int x, int y ){
+void drawString(char* text, int len, int x, int y ) {
   for ( int idx = 0; idx < len; idx ++ )
   {
     int c = text[idx] - 32;
@@ -448,7 +451,7 @@ void drawString(char* text, int len, int x, int y ){
 }
 
 // draw sprite to matrix display buffer
-void drawSprite( byte* sprite, int x, int y, int width, int height ){
+void drawSprite( byte* sprite, int x, int y, int width, int height ) {
   // The mask is used to get the column bit from the sprite row
   byte mask = B10000000;
 
@@ -470,7 +473,7 @@ void drawSprite( byte* sprite, int x, int y, int width, int height ){
 // update all timer objects
 void TimerUpdate(void) {
   timerDot->Update();
-  timerSwitch->Update();
+  //timerSwitch->Update();
   timerMarquee->Update();
 }
 
@@ -578,7 +581,7 @@ void reconnectWiFi(void) {
 void reconnectMQTT(void) {
   // Loop until we're reconnected
   while (!mqtt.connected()) {
-    Serial.print(":");
+    Serial.print("*");
     String client_ID = "ESP-";
     client_ID += long(ESP.getChipId());
     char msg[20];

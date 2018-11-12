@@ -44,7 +44,7 @@ TimeChangeRule CET = {"CET", Last, Sun, Oct, 3, 60};       //Central European St
 Timezone CE(CEST, CET);
 
 // DISPLAY SPEED
-const int ANIM_DELAY = 80;      // marquee animation speed
+const int ANIM_DELAY = 40;      // marquee animation speed
 const int DOT_DELAY = 500;      // dot blink speed
 //const int SWITCH_DELAY = 5000;  // switch between time and marquee speed
 const int REPETITIONS = 2;      // number of marquee repetition
@@ -125,7 +125,7 @@ TimerObject *timerDot = new TimerObject(DOT_DELAY, &updateDot, false);
 TimerObject *timerMarquee = new TimerObject(ANIM_DELAY, &updateMarquee, false);
 
 // variables
-char message[] = "                    ";  // recieved marquee message
+char message[] = "                        ";  // recieved marquee message
 unsigned int localPort = 2390;            // local port to listen for UDP packets
 bool shouldSaveConfig = false;            // flag for saving data
 int x = 0, y = 0;                         // marquee coordinates start top left
@@ -199,7 +199,7 @@ void setup()
   timerDot->Start();
   //timerSwitch->Start();
   timerMarquee->Start();
-  pinMode(A0,INPUT);
+  pinMode(A0, INPUT);
 }
 
 void loop() {
@@ -221,20 +221,20 @@ void loop() {
     lmd.setIntensity(intensity); // 0 = low, 10 = high
 
     drawString("    ", 4, 0, 0);
-    lmd.display();
+    //lmd.display();
 
     if (checkMessage()) {
       if (repetitionsCounter < REPETITIONS) {
         if (boolMarquee == true) {
           boolMarquee = false;
           // Serial.print(".");
+          drawString(message, 24, x, 0);
+          lmd.display();
           // Advance to next coordinate
-          if ( --x < len * -8 ) {
+          if ( --x < 24 * -8 ) {
             x = LEDMATRIX_WIDTH;
             repetitionsCounter++;
           }
-          drawString(message, 4, x, 0);
-          lmd.display();
         }
       }
       else {
@@ -338,7 +338,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.println();
   if (top == "owar/matrixdisplay/message") {
     for (int i = 0; i < length; i++) {
-      message[i] = (char)payload[i];
+      message[i+4] = (char)payload[i];
     }
     updateSwitch();
   }
@@ -553,7 +553,7 @@ void reconnectWiFi(void) {
   strcpy(mqtt_password, custom_mqtt_password.getValue());
   strcpy(mqtt_messageTopic, custom_mqtt_messageTopic.getValue());
   strcpy(ntp_server, custom_ntp_server.getValue());
- // strcpy(offline_mode, custom_offline_mode.getValue());
+  // strcpy(offline_mode, custom_offline_mode.getValue());
 
   //save the custom parameters to FS
   if (shouldSaveConfig) {

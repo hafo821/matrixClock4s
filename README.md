@@ -11,4 +11,3 @@ Just connect power, set the WifiManager (SSID: MatrixClock) and connect to your 
 ![alt text](https://raw.githubusercontent.com/owarek/matrixClock4s/master/img/IMG_20181108_080316.jpg)
 TODO:  
 *Create a 6 segment version  
-*ADD support for offline mode (no MQTT, WiFi only after start for NTP sync)

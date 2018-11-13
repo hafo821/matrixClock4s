@@ -18,7 +18,5 @@ TODO:
 *Add WifiManager setting for default number of marquee repetitions  
 *Add setting of marquee repetition number through number code in MQTT message:  repetitions\*number\*  
 *Add setting of backlight intensity through mqtt message: intensity\*number\*  
-*Upload lasercut box sources  
-*Upload some Wifimanager settings screenshots  
-*Add WifiManager setting for MQTT only mode (display only MQTT messages, no time from NTP)  
+*Upload some Wifimanager settings screenshots   
 *Add WifiManager setting for Marquee animation speed  

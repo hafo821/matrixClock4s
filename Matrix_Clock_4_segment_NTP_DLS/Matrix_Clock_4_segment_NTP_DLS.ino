@@ -15,33 +15,36 @@
 #include <PubSubClient.h>        //https://github.com/knolleary/pubsubclient
 #include "TimerObject.h"         //https://playground.arduino.cc/Code/ArduinoTimerObject
 #include <LEDMatrixDriver.hpp>   //https://github.com/bartoszbielawski/LEDMatrixDriver/blob/master/src/LEDMatrixDriver.hpp
+#include <Time.h>
 
-#define DEBUG 0 // if 1, more output will appear on Serial
+#define DEBUG_LEVEL 1 // 0,1 or 2
 
 // values for WiFiManager setup
 // define your default values here, if there are different values in config.json, they are overwritten.
-char mqtt_server[40] = "";
+char mqtt_server_adress[40] = "";
 char mqtt_port[6] = "";
 char mqtt_user[40] = "";
 char mqtt_password[40] = "";
-char mqtt_messageTopic[40] = "";
-char ntp_server[40] = "";
+char mqtt_message_topic[40] = "";
+char ntp_server_adress[40] = "";
 char offline_mode[40] = "";
+char mqtt_only_mode[40] = "";
+
+bool MQTT_ONLY_MODE = false;
 
 //LED matrix definition
 // Define the ChipSelect pin for the led matrix (Dont use the SS or MISO pin of your Arduino!)
 // Other pins are arduino specific SPI pins (MOSI=DIN of the LEDMatrix and CLK) see https://www.arduino.cc/en/Reference/SPI
 const uint8_t LEDMATRIX_CS_PIN = D3;
 // Define LED Matrix dimensions (0-n) - eg: 32x8 = 31x7
-const int LEDMATRIX_WIDTH = 31;
-const int LEDMATRIX_HEIGHT = 7;
 const int LEDMATRIX_SEGMENTS = 4;
+const int LEDMATRIX_HEIGHT = 7;
+const int LEDMATRIX_WIDTH = (LEDMATRIX_SEGMENTS * 8) - 1;
 
 // TIMEZONE AND DLS SETUP
-//Central European Time (Frankfurt, Paris)
-TimeChangeRule CEST = {"CEST", Last, Sun, Mar, 2, 120};     //Central European Summer Time
-TimeChangeRule CET = {"CET", Last, Sun, Oct, 3, 60};       //Central European Standard Time
-Timezone CE(CEST, CET);
+TimeChangeRule CEST = {"CEST", Last, Sun, Mar, 2, 120};     // Central European Summer Time
+TimeChangeRule CET = {"CET", Last, Sun, Oct, 3, 60};        // Central European Standard Time
+Timezone CE(CEST, CET);                                     // Central European Time (PRAGUE)
 
 // DISPLAY SPEED
 const int ANIM_DELAY = 40;      // marquee animation speed
@@ -157,7 +160,8 @@ TimerObject *timerDot = new TimerObject(DOT_DELAY, &updateDot, false);
 TimerObject *timerMarquee = new TimerObject(ANIM_DELAY, &updateMarquee, false);
 
 // variables
-char message[] = "                        ";  // recieved marquee message
+char message[100] = "";                   // recieved marquee message
+int messageSize = 0;                      // size of recieved message
 unsigned int localPort = 2390;            // local port to listen for UDP packets
 bool shouldSaveConfig = false;            // flag for saving data
 int x = 0, y = 0;                         // marquee coordinates start top left
@@ -169,8 +173,7 @@ bool boolMarquee  = false;                // marquee animation flag
 int h = 00;                               // actual hour
 int m = 00;                               // actual minute
 int s = 00;                               // actual second
-char text[] = "0000";                     // display text holder
-int len = strlen(text);                   // length of text holder
+char text[] = "000000";                   // display text holder
 time_t prevDisplay = 0;                   // when the digital clock was displayed
 const int NTP_PACKET_SIZE = 48;           // NTP time is in the first 48 bytes of message
 byte packetBuffer[NTP_PACKET_SIZE];       // buffer to hold incoming & outgoing packets
@@ -180,6 +183,8 @@ int intensity = 0;                        // intensity of display backlight
 //-------------------------------------------------------------------------------------------
 void setup()
 {
+  messageSize = 100;
+  clearMessage();
   pinMode(A0, INPUT_PULLUP);
   Serial.begin(115200);
   while (!Serial) ; // Needed for Leonardo only
@@ -189,7 +194,7 @@ void setup()
   lmd.setEnabled(true);
   lmd.setIntensity(10);   // 0 = low, 10 = high
 
-  drawString("FS", 2, 0, 0);
+  drawString("FS    ", LEDMATRIX_SEGMENTS, 0, 0);
   lmd.display();
 
   //clean FS, for testing
@@ -197,19 +202,19 @@ void setup()
   //read configuration from FS json
   reconnectWiFi();
 
-  Serial.print("Local port: ");
+  Serial.print("port: ");
   Serial.println(Udp.localPort());
   Serial.print("NTP server: ");
-  Serial.println(ntp_server);
-  Serial.println("waiting for sync");
+  Serial.print(ntp_server_adress);
+  Serial.println(" waiting for sync");
 
-  drawString("NTP ", 4, 0, 0);
+  drawString("NTP   ", LEDMATRIX_SEGMENTS, 0, 0);
   lmd.display();
 
   delay(1000);
   setSyncProvider(getNtpTime);
-  if (timeStatus() == timeNotSet) {
-    drawString("DEAD", 4, 0, 0);
+  while (timeStatus() == timeNotSet) {
+    drawString("DEAD  ", LEDMATRIX_SEGMENTS, 0, 0);
     lmd.display();
     delay(5000);
     getNtpTime();
@@ -217,31 +222,31 @@ void setup()
 
   int port = atoi(mqtt_port);
 
-  drawString("MQTT", 4, 0, 0);
+  drawString("MQTT  ", LEDMATRIX_SEGMENTS, 0, 0);
   lmd.display();
 
-  mqtt.setServer(mqtt_server, port);
+  mqtt.setServer(mqtt_server_adress, port);
   mqtt.setCallback(mqttCallback);
 
   reconnectMQTT();
 
   Serial.println();
-  Serial.println("GO");
-  drawString(" GO ", 4, 0, 0);
+  Serial.println("1...2...3...GO");
+  Serial.println("--------------");
+  drawString(" GO   ", LEDMATRIX_SEGMENTS, 0, 0);
   lmd.display();
   delay(1000);
 
   timerDot->Start();
-  //timerSwitch->Start();
   timerMarquee->Start();
   pinMode(A0, INPUT);
 }
 
 void loop() {
   mqtt.loop();
-  if  (!mqtt.connected() && offline_mode[0] == '0' && offline_mode[1] == 'F' && offline_mode[2] == 'F') {
+  if  (!mqtt.connected() && (strcmp ("ONLINE", offline_mode) == 0)) {
     Serial.println("mqtt dead");
-    drawString("OFFL", 4, 0, 0);
+    drawString("OFFLINE", LEDMATRIX_SEGMENTS, 0, 0);
     lmd.display();
     reconnectMQTT();
   }
@@ -249,24 +254,23 @@ void loop() {
 
   if (boolSwitch == true) {
     // display marquee
-    intensity += 2;
-    if (intensity > 10)
-      intensity = 10;
 
+    intensity += 2;
+    intensity = constrain(intensity, 0, 10);
     lmd.setIntensity(intensity); // 0 = low, 10 = high
 
-    drawString("    ", 4, 0, 0);
-    //lmd.display();
+    drawString("    ", LEDMATRIX_SEGMENTS, 0, 0);
 
     if (checkMessage()) {
-      if (repetitionsCounter < REPETITIONS) {
+      if ((repetitionsCounter < REPETITIONS) || strcmp ("TRUE", mqtt_only_mode) == 0) {
         if (boolMarquee == true) {
           boolMarquee = false;
-          // Serial.print(".");
-          drawString(message, 24, x, 0);
+          if (DEBUG_LEVEL > 1)
+            Serial.print(".");
+          drawString(message, messageSize, x, 0);
           lmd.display();
           // Advance to next coordinate
-          if ( --x < 24 * -8 ) {
+          if ( --x < messageSize * -8 ) {
             x = LEDMATRIX_WIDTH;
             repetitionsCounter++;
           }
@@ -287,7 +291,8 @@ void loop() {
     if (timeStatus() != timeNotSet) {
       if (now() != prevDisplay) { //update the display only if time has changed
         prevDisplay = now();
-        // digitalClockDisplay();
+        if (DEBUG_LEVEL > 0)
+          digitalClockDisplay();
 
         h = hour();
         m = minute();
@@ -301,22 +306,32 @@ void loop() {
           textStr += String(0);
         }
         textStr += String(m);
+        if (s < 10) {
+          textStr += String(0);
+        }
+        textStr += String(s);
 
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < LEDMATRIX_SEGMENTS; i++) {
           text[i] = textStr[i];
         }
-        drawString(text, len, 0, 0);
+        drawString(text, LEDMATRIX_SEGMENTS, 0, 0);
       }
     }
     if (boolDot == true) {
       boolDot = false;
-      if (DEBUG)
+      if (DEBUG_LEVEL > 1)
         Serial.println("--DOT--");
       if (dot == 0) {
         lmd.setPixel(15, 1, true);
         lmd.setPixel(15, 2, true);
         lmd.setPixel(15, 5, true);
         lmd.setPixel(15, 6, true);
+        if (LEDMATRIX_SEGMENTS > 4) {
+          lmd.setPixel(31, 1, false);
+          lmd.setPixel(31, 2, false);
+          lmd.setPixel(31, 5, false);
+          lmd.setPixel(31, 6, false);
+        }
         dot = 1;
       }
       else {
@@ -324,9 +339,16 @@ void loop() {
         lmd.setPixel(15, 2, false);
         lmd.setPixel(15, 5, false);
         lmd.setPixel(15, 6, false);
+        if (LEDMATRIX_SEGMENTS > 4) {
+          lmd.setPixel(31, 1, true);
+          lmd.setPixel(31, 2, true);
+          lmd.setPixel(31, 5, true);
+          lmd.setPixel(31, 6, true);
+        }
         dot = 0;
       }
       intensity = map(analogRead(A0), 0, 1023, 0, 10);
+      intensity = constrain(intensity, 0, 10);
       lmd.setIntensity(intensity);
       lmd.display();
     }
@@ -343,7 +365,7 @@ void updateDot(void) {
 //switch timer callback
 void updateSwitch(void) {
   boolSwitch = true;
-  if (DEBUG)
+  if (DEBUG_LEVEL > 1)
     Serial.println("--MARQUEE--");
 }
 
@@ -360,21 +382,28 @@ void saveConfigCallback () {
 
 // callback for incomming MQTT messages
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-
-  for (int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
-  }
-
   String top = topic;
 
-  Serial.println();
-  if (top == "owar/matrixdisplay/message") {
+  if (top == mqtt_message_topic) {
     for (int i = 0; i < length; i++) {
-      message[i + 4] = (char)payload[i];
+      message[i + LEDMATRIX_SEGMENTS] = (char)payload[i];
+      messageSize = length + LEDMATRIX_SEGMENTS;
     }
+
+    Serial.print("Message arrived [");
+    Serial.print(topic);
+    Serial.print("]");
+
+    Serial.print("Size [");
+    Serial.print(messageSize);
+    Serial.print("] ");
+
+    for (int i = 0; i < length; i++) {
+      Serial.print((char)payload[i]);
+    }
+
+    Serial.println();
+
     updateSwitch();
   }
   delay(100);
@@ -382,16 +411,21 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
 // clearing of mqtt message
 void clearMessage(void) {
-  for (int i = 0; i < 19; i++) {
+  for (int i = 0; i < messageSize - 1; i++) {
     message[i] = ' ';
   }
+  messageSize = 0;
 }
 
 // checking if there is some mqtt message to marquee
 bool checkMessage(void) {
-  for (int i = 0; i < 19; i++) {
-    if (message[i] != ' ')
-      return true;
+  //  for (int i = 0; i < 19; i++) {
+  //    if (message[i] != ' ')
+  //      return true;
+  //  }
+  //  return false;
+  if (messageSize > 0) {
+    return true;
   }
   return false;
 }
@@ -423,13 +457,13 @@ void printDigits(int digits) {
 // NTP time getter
 time_t getNtpTime() {
   while (Udp.parsePacket() > 0) ; // discard any previously received packets
-  Serial.println("Transmit NTP Request");
+  Serial.print("Transmit NTP Request ");
   sendNTPpacket();
   uint32_t beginWait = millis();
   while (millis() - beginWait < 1500) {
     int size = Udp.parsePacket();
     if (size >= NTP_PACKET_SIZE) {
-      Serial.println("Receive NTP Response");
+      Serial.print("NTP OK: Receive NTP Response ");
       Udp.read(packetBuffer, NTP_PACKET_SIZE);  // read packet into the buffer
       unsigned long secsSince1900;
       // convert four bytes starting at location 40 to a long integer
@@ -437,12 +471,15 @@ time_t getNtpTime() {
       secsSince1900 |= (unsigned long)packetBuffer[41] << 16;
       secsSince1900 |= (unsigned long)packetBuffer[42] << 8;
       secsSince1900 |= (unsigned long)packetBuffer[43];
-      //printTime(CE.toLocal(utc, &tcr), tcr -> abbrev, "Bratislava");
-      //return secsSince1900 - 2208988800UL + timeZone * SECS_PER_HOUR;
-      return CE.toLocal(secsSince1900 - 2208988800UL, &tcr);
+      time_t utc = secsSince1900 - 2208988800UL;
+      printDateTime(utc);
+      Serial.print(" ---day light saving---> ");
+      printDateTime(CE.toLocal(utc, &tcr));
+      Serial.println();
+      return CE.toLocal(utc, &tcr);
     }
   }
-  Serial.println("No NTP Response :-(");
+  Serial.println("NOK: No NTP Response :-(");
   return 0; // return 0 if unable to get the time
 }
 
@@ -463,7 +500,7 @@ void sendNTPpacket(void) {
   packetBuffer[15]  = 52;
   // all NTP fields have been given values, now
   // you can send a packet requesting a timestamp:
-  Udp.beginPacket(ntp_server, 123); //NTP requests are to port 123
+  Udp.beginPacket(ntp_server_adress, 123); //NTP requests are to port 123
   Udp.write(packetBuffer, NTP_PACKET_SIZE);
   Udp.endPacket();
 }
@@ -507,22 +544,24 @@ void drawSprite( byte* sprite, int x, int y, int width, int height ) {
 // update all timer objects
 void TimerUpdate(void) {
   timerDot->Update();
-  //timerSwitch->Update();
   timerMarquee->Update();
 }
 
 // reconnect to WiFi
 void reconnectWiFi(void) {
-  Serial.println("mounting FS...");
-
+  if (DEBUG_LEVEL > 0)
+    Serial.println("mounting FS...");
   if (SPIFFS.begin()) {
-    Serial.println("mounted file system");
+    if (DEBUG_LEVEL > 0)
+      Serial.println("mounted file system");
     if (SPIFFS.exists("/config.json")) {
       //file exists, reading and loading
-      Serial.println("reading config file");
+      if (DEBUG_LEVEL > 0)
+        Serial.println("reading config file");
       File configFile = SPIFFS.open("/config.json", "r");
       if (configFile) {
-        Serial.println("opened config file");
+        if (DEBUG_LEVEL > 0)
+          Serial.println("opened config file");
         size_t size = configFile.size();
         // Allocate a buffer to store contents of the file.
         std::unique_ptr<char[]> buf(new char[size]);
@@ -530,18 +569,22 @@ void reconnectWiFi(void) {
         configFile.readBytes(buf.get(), size);
         DynamicJsonBuffer jsonBuffer;
         JsonObject& json = jsonBuffer.parseObject(buf.get());
-        json.printTo(Serial);
+        if (DEBUG_LEVEL > 1) {
+          json.printTo(Serial);
+          Serial.println();
+        }
         if (json.success()) {
-          Serial.println("\nparsed json");
-          drawString("FSOK", 4, 0, 0);
+          if (DEBUG_LEVEL > 0)
+            Serial.println("parsed json");
+          drawString("FSOK  ", LEDMATRIX_SEGMENTS, 0, 0);
           lmd.display();
 
-          strcpy(mqtt_server, json["mqtt_server"]);
+          strcpy(mqtt_server_adress, json["mqtt_server_adress"]);
           strcpy(mqtt_port, json["mqtt_port"]);
           strcpy(mqtt_user, json["mqtt_user"]);
           strcpy(mqtt_password, json["mqtt_password"]);
-          strcpy(mqtt_messageTopic, json["mqtt_messageTopic"]);
-          strcpy(ntp_server, json["ntp_server"]);
+          strcpy(mqtt_message_topic, json["mqtt_message_topic"]);
+          strcpy(ntp_server_adress, json["ntp_server_adress"]);
           strcpy(offline_mode, json["offline_mode"]);
 
         } else {
@@ -553,55 +596,64 @@ void reconnectWiFi(void) {
     Serial.println("failed to mount FS");
   }
   //end read
-
-  drawString("WIFI", 4, 0, 0);
+  drawString("WIFI  ", LEDMATRIX_SEGMENTS, 0, 0);
   lmd.display();
 
-  WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_server, 40);
-  WiFiManagerParameter custom_mqtt_port("port", "mqtt port", mqtt_port, 5);
-  WiFiManagerParameter custom_mqtt_user("user", "mqtt user", mqtt_user, 40);
-  WiFiManagerParameter custom_mqtt_password("password", "mqtt password", mqtt_password, 40);
-  WiFiManagerParameter custom_mqtt_messageTopic("message topic", "message topic", mqtt_messageTopic, 40);
-  WiFiManagerParameter custom_ntp_server("ntp server", "ntp server", ntp_server, 40);
-  WiFiManagerParameter custom_offline_mode("offline mode", "offline mode", offline_mode, 40);
+  WiFiManagerParameter custom_mqtt_server_adress("mqtt_server_adress", "mqtt server address", mqtt_server_adress, 40);
+  WiFiManagerParameter custom_mqtt_port("mqtt_port", "mqtt server port", mqtt_port, 5);
+  WiFiManagerParameter custom_mqtt_user("mqtt_user", "mqtt server username", mqtt_user, 40);
+  WiFiManagerParameter custom_mqtt_password("mqtt_password", "mqtt server password", mqtt_password, 40);
+  WiFiManagerParameter custom_mqtt_message_topic("mqtt_message_topic", "mqtt message topic", mqtt_message_topic, 40);
+  WiFiManagerParameter custom_ntp_server_adress("ntp_server_adress", "ntp server address", ntp_server_adress, 40);
+  WiFiManagerParameter custom_offline_mode("offline_mode", "OFFLINE or ONLINE mode", offline_mode, 40);
+  WiFiManagerParameter custom_mqtt_only_mode("mqtt_only_mode", "TRUE or FALSE mqtt only mode", mqtt_only_mode, 40);
 
   WiFiManager wifiManager;
+
+  wifiManager.resetSettings();
+
+  if (DEBUG_LEVEL < 1) {
+    wifiManager.setDebugOutput(false);
+  }
 
   //set config save notify callback
   wifiManager.setSaveConfigCallback(saveConfigCallback);
 
   //add all your parameters here
-  wifiManager.addParameter(&custom_mqtt_server);
+  wifiManager.addParameter(&custom_mqtt_server_adress);
   wifiManager.addParameter(&custom_mqtt_port);
   wifiManager.addParameter(&custom_mqtt_user);
   wifiManager.addParameter(&custom_mqtt_password);
-  wifiManager.addParameter(&custom_mqtt_messageTopic);
-  wifiManager.addParameter(&custom_ntp_server);
+  wifiManager.addParameter(&custom_mqtt_message_topic);
+  wifiManager.addParameter(&custom_ntp_server_adress);
   wifiManager.addParameter(&custom_offline_mode);
+  wifiManager.addParameter(&custom_mqtt_only_mode);
 
   wifiManager.autoConnect("MatrixClock");
 
   //read updated parameters
-  strcpy(mqtt_server, custom_mqtt_server.getValue());
+  strcpy(mqtt_server_adress, custom_mqtt_server_adress.getValue());
   strcpy(mqtt_port, custom_mqtt_port.getValue());
   strcpy(mqtt_user, custom_mqtt_user.getValue());
   strcpy(mqtt_password, custom_mqtt_password.getValue());
-  strcpy(mqtt_messageTopic, custom_mqtt_messageTopic.getValue());
-  strcpy(ntp_server, custom_ntp_server.getValue());
+  strcpy(mqtt_message_topic, custom_mqtt_message_topic.getValue());
+  strcpy(ntp_server_adress, custom_ntp_server_adress.getValue());
   strcpy(offline_mode, custom_offline_mode.getValue());
+  strcpy(mqtt_only_mode, custom_mqtt_only_mode.getValue());
 
   //save the custom parameters to FS
   if (shouldSaveConfig) {
     Serial.println("saving config");
     DynamicJsonBuffer jsonBuffer;
     JsonObject& json = jsonBuffer.createObject();
-    json["mqtt_server"] = mqtt_server;
+    json["mqtt_server_adress"] = mqtt_server_adress;
     json["mqtt_port"] = mqtt_port;
     json["mqtt_user"] = mqtt_user;
     json["mqtt_password"] = mqtt_password;
-    json["mqtt_messageTopic"] = mqtt_messageTopic;
-    json["ntp_server"] = ntp_server;
+    json["mqtt_message_topic"] = mqtt_message_topic;
+    json["ntp_server_adress"] = ntp_server_adress;
     json["offline_mode"] = offline_mode;
+    json["mqtt_only_mode"] = mqtt_only_mode;
 
     File configFile = SPIFFS.open("/config.json", "w");
     if (!configFile) {
@@ -615,11 +667,11 @@ void reconnectWiFi(void) {
     //end save
   }
 
-  Serial.println("connected...yeey :)");
+  Serial.print("WiFi connected ");
 
   Serial.print("IP number assigned by DHCP is ");
   Serial.println(WiFi.localIP());
-  Serial.println("Starting UDP");
+  Serial.print("Starting UDP, ");
   Udp.begin(localPort);
 
   delay(500);
@@ -629,26 +681,26 @@ void reconnectWiFi(void) {
 // reconnect to MQTT
 void reconnectMQTT(void) {
   // Loop until we're reconnected
-  if (strcmp ("OFF", offline_mode) == 0) {
+  if (strcmp ("ONLINE", offline_mode) == 0) {
     Serial.print("MQTT-Connecting to: ");
-    Serial.print(mqtt_server);
+    Serial.print(mqtt_server_adress);
     Serial.print(":");
     int port = atoi(mqtt_port);
-    Serial.println(port);
+    Serial.print(port);
     while (!mqtt.connected()) {
-      Serial.print("*");
+      Serial.print(" _*_");
       String client_ID = "ESP-";
       client_ID += long(ESP.getChipId());
       char msg[20];
       client_ID.toCharArray(msg, client_ID.length() + 1);
       if (mqtt.connect(msg, mqtt_user, mqtt_password)) {
 
-        mqtt.subscribe(mqtt_messageTopic);
+        mqtt.subscribe(mqtt_message_topic);
       }
       delay(500);
       MQTTreconnectCounter ++;
     }
-
+    Serial.print(" connected");
     if (MQTTreconnectCounter > (10000 / 500)) {
       reconnectWiFi();
     }
@@ -659,4 +711,20 @@ void reconnectMQTT(void) {
   else {
     Serial.print("MQTT disabled");
   }
+}
+
+void printDateTime(time_t t)
+{
+  Serial.print(hour(t));
+  printDigits(minute(t));
+  printDigits(second(t));
+
+  Serial.print(" ");
+  Serial.print(dayShortStr(weekday(t)));
+  Serial.print("/");
+  Serial.print(day(t));
+  Serial.print("/");
+  Serial.print(monthShortStr(month(t)));
+  Serial.print("/");
+  Serial.print(year(t));
 }

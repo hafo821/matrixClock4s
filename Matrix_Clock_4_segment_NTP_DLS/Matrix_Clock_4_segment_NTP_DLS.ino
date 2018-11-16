@@ -17,7 +17,7 @@
 #include <LEDMatrixDriver.hpp>   //https://github.com/bartoszbielawski/LEDMatrixDriver/blob/master/src/LEDMatrixDriver.hpp
 #include <Time.h>
 
-#define DEBUG_LEVEL 1 // 0,1 or 2
+#define DEBUG_LEVEL 1 // 0, 1 or 2
 
 // values for WiFiManager setup
 // define your default values here, if there are different values in config.json, they are overwritten.
@@ -29,15 +29,16 @@ char mqtt_message_topic[40] = "";
 char ntp_server_adress[40] = "";
 char offline_mode[40] = "";
 char mqtt_only_mode[40] = "";
-
-bool MQTT_ONLY_MODE = false;
+char number_of_display_segments[3] = "";
+char number_of_marquee_repetitions[10] = "";
+char marquee_speed[10] = "";
 
 //LED matrix definition
 // Define the ChipSelect pin for the led matrix (Dont use the SS or MISO pin of your Arduino!)
 // Other pins are arduino specific SPI pins (MOSI=DIN of the LEDMatrix and CLK) see https://www.arduino.cc/en/Reference/SPI
 const uint8_t LEDMATRIX_CS_PIN = D3;
 // Define LED Matrix dimensions (0-n) - eg: 32x8 = 31x7
-const int LEDMATRIX_SEGMENTS = 4;
+int LEDMATRIX_SEGMENTS = 4;
 const int LEDMATRIX_HEIGHT = 7;
 const int LEDMATRIX_WIDTH = (LEDMATRIX_SEGMENTS * 8) - 1;
 
@@ -47,10 +48,9 @@ TimeChangeRule CET = {"CET", Last, Sun, Oct, 3, 60};        // Central European 
 Timezone CE(CEST, CET);                                     // Central European Time (PRAGUE)
 
 // DISPLAY SPEED
-const int ANIM_DELAY = 40;      // marquee animation speed
-const int DOT_DELAY = 500;      // dot blink speed
-//const int SWITCH_DELAY = 5000;  // switch between time and marquee speed
-const int REPETITIONS = 2;      // number of marquee repetition
+unsigned long ANIM_DELAY = 40;               // marquee animation speed
+unsigned long REPETITIONS = 2;               // number of marquee repetition
+const int DOT_DELAY = 500;         // dot blink speed
 
 // This is the font definition. You can use http://gurgleapps.com/tools/matrix to create your own font or sprites.
 // If you like the font feel free to use it. I created it myself and donate it to the public domain.
@@ -160,36 +160,38 @@ TimerObject *timerDot = new TimerObject(DOT_DELAY, &updateDot, false);
 TimerObject *timerMarquee = new TimerObject(ANIM_DELAY, &updateMarquee, false);
 
 // variables
-char message[100] = "";                   // recieved marquee message
-int messageSize = 0;                      // size of recieved message
-unsigned int localPort = 2390;            // local port to listen for UDP packets
-bool shouldSaveConfig = false;            // flag for saving data
-int x = 0, y = 0;                         // marquee coordinates start top left
-bool dot = 0;                             // state of the dot
-int repetitionsCounter = 0;               // counter for marquee repetition
-bool boolDot  = false;                    // dot switch flag
-bool boolSwitch  = false;                 // time/marquee switch flag
-bool boolMarquee  = false;                // marquee animation flag
-int h = 00;                               // actual hour
-int m = 00;                               // actual minute
-int s = 00;                               // actual second
-char text[] = "000000";                   // display text holder
-time_t prevDisplay = 0;                   // when the digital clock was displayed
-const int NTP_PACKET_SIZE = 48;           // NTP time is in the first 48 bytes of message
-byte packetBuffer[NTP_PACKET_SIZE];       // buffer to hold incoming & outgoing packets
-int WiFireconnectCounter = 0;             // counter for WiFi reconnection
-int MQTTreconnectCounter = 0;             // counter for MQTT reconnection
-int intensity = 0;                        // intensity of display backlight
+char message[100] = "";                             // recieved marquee message
+int messageSize = 0;                                // size of recieved message
+unsigned int localPort = 2390;                      // local port to listen for UDP packets
+bool shouldSaveConfig = false;                      // flag for saving data
+int x = 0, y = 0;                                   // marquee coordinates start top left
+bool dot = 0;                                       // state of the dot
+unsigned long repetitionsCounter = 0;               // counter for marquee repetition
+bool boolDot  = false;                              // dot switch flag
+bool boolSwitch  = false;                           // time/marquee switch flag
+bool boolMarquee  = false;                          // marquee animation flag
+unsigned int h = 00;                                // actual hour
+unsigned int m = 00;                                // actual minute
+unsigned int s = 00;                                // actual second
+char text[] = "000000";                             // display text holder
+time_t prevDisplay = 0;                             // when the digital clock was displayed
+const int NTP_PACKET_SIZE = 48;                     // NTP time is in the first 48 bytes of message
+byte packetBuffer[NTP_PACKET_SIZE];                 // buffer to hold incoming & outgoing packets
+unsigned long WiFireconnectCounter = 0;             // counter for WiFi reconnection
+unsigned long MQTTreconnectCounter = 0;             // counter for MQTT reconnection
+unsigned long intensity = 0;                        // intensity of display backlight
+unsigned long PREVIOUS_REPETITIONS = REPETITIONS;   // store actual count of repetitions to revert back later
 //-------------------------------------------------------------------------------------------
 void setup()
 {
+  time_t myTimeStatus;
   messageSize = 100;
   clearMessage();
   pinMode(A0, INPUT_PULLUP);
   Serial.begin(115200);
   while (!Serial) ; // Needed for Leonardo only
   delay(250);
-  Serial.println("MatrixClock");
+  debugPrint(true, "MATRIX CLOCK", "PROGRAM START", true, 0);
 
   lmd.setEnabled(true);
   lmd.setIntensity(10);   // 0 = low, 10 = high
@@ -200,24 +202,26 @@ void setup()
   //clean FS, for testing
   //SPIFFS.format();
   //read configuration from FS json
-  reconnectWiFi();
+  while (reconnectWiFi() == false) {
+    //loop until we are connected to WiFi
+  }
 
-  Serial.print("port: ");
-  Serial.println(Udp.localPort());
-  Serial.print("NTP server: ");
-  Serial.print(ntp_server_adress);
-  Serial.println(" waiting for sync");
+  debugPrint(true, "UDP PORT", String(Udp.localPort()), false, 0);
+  debugPrint(false, "NTP SERVER ADDRESS", String(ntp_server_adress), false, 0);
+  debugPrint(false, "NTP", "WAITING FOR SYNC", true, 0);
 
   drawString("NTP   ", LEDMATRIX_SEGMENTS, 0, 0);
   lmd.display();
 
   delay(1000);
+
   setSyncProvider(getNtpTime);
-  while (timeStatus() == timeNotSet) {
+
+  while (myTimeStatus == timeNotSet) {
     drawString("DEAD  ", LEDMATRIX_SEGMENTS, 0, 0);
+    myTimeStatus = getNtpTime();
     lmd.display();
     delay(5000);
-    getNtpTime();
   }
 
   int port = atoi(mqtt_port);
@@ -230,9 +234,8 @@ void setup()
 
   reconnectMQTT();
 
-  Serial.println();
-  Serial.println("1...2...3...GO");
-  Serial.println("--------------");
+  debugPrint(true, "MATRIX CLOCK", "1...2...3...GO", true, 0);
+
   drawString(" GO   ", LEDMATRIX_SEGMENTS, 0, 0);
   lmd.display();
   delay(1000);
@@ -245,7 +248,7 @@ void setup()
 void loop() {
   mqtt.loop();
   if  (!mqtt.connected() && (strcmp ("ONLINE", offline_mode) == 0)) {
-    Serial.println("mqtt dead");
+    debugPrint(true, "MQTT", "DISCONNECTED", true, 0);
     drawString("OFFLINE", LEDMATRIX_SEGMENTS, 0, 0);
     lmd.display();
     reconnectMQTT();
@@ -265,14 +268,15 @@ void loop() {
       if ((repetitionsCounter < REPETITIONS) || strcmp ("TRUE", mqtt_only_mode) == 0) {
         if (boolMarquee == true) {
           boolMarquee = false;
-          if (DEBUG_LEVEL > 1)
-            Serial.print(".");
+          debugPrint(false, "", ".", false, 2);
           drawString(message, messageSize, x, 0);
           lmd.display();
           // Advance to next coordinate
           if ( --x < messageSize * -8 ) {
             x = LEDMATRIX_WIDTH;
             repetitionsCounter++;
+            debugPrint(false, "", "", true, 2);
+            debugPrint(true, "REPETITIONS", String(repetitionsCounter) + "/" + String(repetitionsCounter), true, 0);
           }
         }
       }
@@ -291,8 +295,7 @@ void loop() {
     if (timeStatus() != timeNotSet) {
       if (now() != prevDisplay) { //update the display only if time has changed
         prevDisplay = now();
-        if (DEBUG_LEVEL > 0)
-          digitalClockDisplay();
+        debugPrint(true, "", "", true, 0);
 
         h = hour();
         m = minute();
@@ -319,8 +322,7 @@ void loop() {
     }
     if (boolDot == true) {
       boolDot = false;
-      if (DEBUG_LEVEL > 1)
-        Serial.println("--DOT--");
+      debugPrint(true, "DISPLAY DEBUG", "--DOT--", true, 2);
       if (dot == 0) {
         lmd.setPixel(15, 1, true);
         lmd.setPixel(15, 2, true);
@@ -365,8 +367,7 @@ void updateDot(void) {
 //switch timer callback
 void updateSwitch(void) {
   boolSwitch = true;
-  if (DEBUG_LEVEL > 1)
-    Serial.println("--MARQUEE--");
+  debugPrint(true, "MARQUEE DEBUG", "--MARQUEE--", true, 2);
 }
 
 //marquee timer callback
@@ -376,37 +377,80 @@ void updateMarquee(void) {
 
 //callback notifying us of the need to save config
 void saveConfigCallback () {
-  Serial.println("Should save config");
+  debugPrint(true, "JSON CONFIG", "SHOULD BE SAVED", true, 0);
   shouldSaveConfig = true;
 }
 
 // callback for incomming MQTT messages
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String top = topic;
+  String incom;
+  String incomMarquee;
 
   if (top == mqtt_message_topic) {
-    for (int i = 0; i < length; i++) {
-      message[i + LEDMATRIX_SEGMENTS] = (char)payload[i];
-      messageSize = length + LEDMATRIX_SEGMENTS;
-    }
-
-    Serial.print("Message arrived [");
-    Serial.print(topic);
-    Serial.print("]");
-
-    Serial.print("Size [");
-    Serial.print(messageSize);
-    Serial.print("] ");
+    repetitionsCounter = 0;
 
     for (int i = 0; i < length; i++) {
-      Serial.print((char)payload[i]);
+      incom += (char)payload[i];
     }
 
-    Serial.println();
+    if (getValue(incom, '*', 1) == "1") {
+      getValue(incom, '*', 2).toCharArray(mqtt_only_mode, getValue(incom, '*', 2).length() + 1);
 
+      for (int i = 0; i < LEDMATRIX_SEGMENTS - 1; i++) {
+        incomMarquee += ' ';
+      }
+      incomMarquee += getValue(incom, '*', 3);
+      incomMarquee.toCharArray(message, incomMarquee.length() + 1);
+      messageSize = incomMarquee.length();
+
+      REPETITIONS = 0;
+    }
+    else if ( getValue(incom, '*', 1) == "0") {
+
+      PREVIOUS_REPETITIONS = REPETITIONS;
+      REPETITIONS = getValue(incom, '*', 2).toInt();
+      memcpy(mqtt_only_mode, "FALSE", 5);
+
+      for (int i = 0; i < LEDMATRIX_SEGMENTS - 1; i++) {
+        incomMarquee += ' ';
+      }
+      incomMarquee += getValue(incom, '*', 3);
+      incomMarquee.toCharArray(message, incomMarquee.length() + 1);
+      messageSize = incomMarquee.length();
+    }
+    else if (getValue(incom, '*', 1) == "2") {
+      switch (REPETITIONS = getValue(incom, '*', 2).toInt()) {
+        case 0:
+          resetHandler("FACTORY");
+          break;
+        case 1:
+          resetHandler("SPIFFS");
+          break;
+        case 2:
+          resetHandler("WIFI");
+          break;
+      }
+
+    }
+    else {
+      REPETITIONS = PREVIOUS_REPETITIONS;
+      memcpy(mqtt_only_mode, "FALSE", 5);
+
+      for (int i = 0; i < length; i++) {
+        message[i + LEDMATRIX_SEGMENTS - 1] = (char)payload[i];
+        messageSize = length + LEDMATRIX_SEGMENTS - 1;
+      }
+    }
     updateSwitch();
   }
-  delay(100);
+
+  debugPrint(true, "MESSAGE TOPIC", topic, false, 0);
+  debugPrint(false, "MESSAGE SIZE", String(messageSize), false, 0);
+  debugPrint(false, "MESSAGE PAYLOAD", String(incom), true, 0);
+
+  debugPrint(true, "PARSED MESSAGE", getValue(incom, '*', 1) + "--" + getValue(incom, '*', 2) + "--" + getValue(incom, '*', 3) + "--", false, 1);
+  debugPrint(false, "FINAL MESSAGE", message, true, 1);
 }
 
 // clearing of mqtt message
@@ -431,19 +475,19 @@ bool checkMessage(void) {
 }
 
 // formating and printing actual time to Serial
-void digitalClockDisplay() {
-  // digital clock display of the time
-  Serial.print(hour());
-  printDigits(minute());
-  printDigits(second());
-  Serial.print(" ");
-  Serial.print(day());
-  Serial.print(".");
-  Serial.print(month());
-  Serial.print(".");
-  Serial.print(year());
-  Serial.println();
-}
+//void digitalClockDisplay() {
+//  // digital clock display of the time
+//  Serial.print(hour());
+//  printDigits(minute());
+//  printDigits(second());
+//  Serial.print(" ");
+//  Serial.print(day());
+//  Serial.print(".");
+//  Serial.print(month());
+//  Serial.print(".");
+//  Serial.print(year());
+//  Serial.println();
+//}
 
 // formating of time
 void printDigits(int digits) {
@@ -457,13 +501,13 @@ void printDigits(int digits) {
 // NTP time getter
 time_t getNtpTime() {
   while (Udp.parsePacket() > 0) ; // discard any previously received packets
-  Serial.print("Transmit NTP Request ");
+  debugPrint(false, "NTP", "TRANSMIT REQUEST", false, 0);
   sendNTPpacket();
   uint32_t beginWait = millis();
   while (millis() - beginWait < 1500) {
     int size = Udp.parsePacket();
     if (size >= NTP_PACKET_SIZE) {
-      Serial.print("NTP OK: Receive NTP Response ");
+      debugPrint(false, "NTP", "RECEIVED RESPONSE", false, 0);
       Udp.read(packetBuffer, NTP_PACKET_SIZE);  // read packet into the buffer
       unsigned long secsSince1900;
       // convert four bytes starting at location 40 to a long integer
@@ -473,13 +517,13 @@ time_t getNtpTime() {
       secsSince1900 |= (unsigned long)packetBuffer[43];
       time_t utc = secsSince1900 - 2208988800UL;
       printDateTime(utc);
-      Serial.print(" ---day light saving---> ");
+      debugPrint(false, "", " ---day light saving---> ", false, 0);
       printDateTime(CE.toLocal(utc, &tcr));
-      Serial.println();
+      debugPrint(false, "", "", true, 0);
       return CE.toLocal(utc, &tcr);
     }
   }
-  Serial.println("NOK: No NTP Response :-(");
+  debugPrint(false, "NTP", "NO RESPONSE", true, 0);
   return 0; // return 0 if unable to get the time
 }
 
@@ -548,20 +592,17 @@ void TimerUpdate(void) {
 }
 
 // reconnect to WiFi
-void reconnectWiFi(void) {
-  if (DEBUG_LEVEL > 0)
-    Serial.println("mounting FS...");
+bool reconnectWiFi(void) {
+  debugPrint(true, "SPIFFS", "MOUNTING FS", true, 1);
   if (SPIFFS.begin()) {
-    if (DEBUG_LEVEL > 0)
-      Serial.println("mounted file system");
+    debugPrint(true, "SPIFFS", "MOUNTED FS", true, 1);
     if (SPIFFS.exists("/config.json")) {
       //file exists, reading and loading
-      if (DEBUG_LEVEL > 0)
-        Serial.println("reading config file");
+      debugPrint(true, "SPIFFS", "READING CONFIG FILE", true, 1);
       File configFile = SPIFFS.open("/config.json", "r");
       if (configFile) {
         if (DEBUG_LEVEL > 0)
-          Serial.println("opened config file");
+          debugPrint(true, "SPIFFS", "OPENED CONFIG FILE", true, 1);
         size_t size = configFile.size();
         // Allocate a buffer to store contents of the file.
         std::unique_ptr<char[]> buf(new char[size]);
@@ -574,8 +615,7 @@ void reconnectWiFi(void) {
           Serial.println();
         }
         if (json.success()) {
-          if (DEBUG_LEVEL > 0)
-            Serial.println("parsed json");
+          debugPrint(true, "SPIFFS", "PARSED JSON", true, 1);
           drawString("FSOK  ", LEDMATRIX_SEGMENTS, 0, 0);
           lmd.display();
 
@@ -588,29 +628,43 @@ void reconnectWiFi(void) {
           strcpy(offline_mode, json["offline_mode"]);
 
         } else {
-          Serial.println("failed to load json config");
+          debugPrint(true, "SPIFFS", "FAILED TO LOAD JSON CONFIG", true, 0);
         }
       }
     }
   } else {
-    Serial.println("failed to mount FS");
+    debugPrint(true, "SPIFFS", "FAILED TO MOUNT FS", true, 0);
   }
   //end read
   drawString("WIFI  ", LEDMATRIX_SEGMENTS, 0, 0);
   lmd.display();
 
-  WiFiManagerParameter custom_mqtt_server_adress("mqtt_server_adress", "mqtt server address", mqtt_server_adress, 40);
-  WiFiManagerParameter custom_mqtt_port("mqtt_port", "mqtt server port", mqtt_port, 5);
-  WiFiManagerParameter custom_mqtt_user("mqtt_user", "mqtt server username", mqtt_user, 40);
-  WiFiManagerParameter custom_mqtt_password("mqtt_password", "mqtt server password", mqtt_password, 40);
-  WiFiManagerParameter custom_mqtt_message_topic("mqtt_message_topic", "mqtt message topic", mqtt_message_topic, 40);
-  WiFiManagerParameter custom_ntp_server_adress("ntp_server_adress", "ntp server address", ntp_server_adress, 40);
-  WiFiManagerParameter custom_offline_mode("offline_mode", "OFFLINE or ONLINE mode", offline_mode, 40);
-  WiFiManagerParameter custom_mqtt_only_mode("mqtt_only_mode", "TRUE or FALSE mqtt only mode", mqtt_only_mode, 40);
+  WiFiManagerParameter custom_text_mqtt_server_address("<p>mqtt server address</p>");
+  WiFiManagerParameter custom_text_mqtt_server_port("<p>mqtt server port</p>");
+  WiFiManagerParameter custom_text_mqtt_server_user("<p>mqtt server user</p>");
+  WiFiManagerParameter custom_text_mqtt_server_password("<p>mqtt server password</p>");
+  WiFiManagerParameter custom_text_mqtt_message_topic("<p>mqtt message topic</p>");
+  WiFiManagerParameter custom_text_ntp_server_address("<p>ntp server address</p>");
+  WiFiManagerParameter custom_text_offline_mode("<p>offline mode</p>");
+  WiFiManagerParameter custom_text_mqtt_only_mode("<p>mqtt only mode</p>");
+  WiFiManagerParameter custom_text_number_of_display_segmetns("<p>number of display segments</p>");
+  WiFiManagerParameter custom_text_marquee_repetition_count("<p>marquee repetition count</p>");
+  WiFiManagerParameter custom_text_marquee_animation_speed("<p>marquee animation speed</p>");
+
+  WiFiManagerParameter custom_mqtt_server_adress("mqtt_server_adress", "example.com", mqtt_server_adress, 40);
+  WiFiManagerParameter custom_mqtt_port("mqtt_port", "1883", mqtt_port, 6);
+  WiFiManagerParameter custom_mqtt_user("mqtt_user", "username", mqtt_user, 40);
+  WiFiManagerParameter custom_mqtt_password("mqtt_password", "password", mqtt_password, 40);
+  WiFiManagerParameter custom_mqtt_message_topic("mqtt_message_topic", "example/topic", mqtt_message_topic, 40);
+  WiFiManagerParameter custom_ntp_server_adress("ntp_server_adress", "pool.ntp.org", ntp_server_adress, 40);
+  WiFiManagerParameter custom_offline_mode("offline_mode", "OFFLINE or ONLINE", offline_mode, 40);
+  WiFiManagerParameter custom_mqtt_only_mode("mqtt_only_mode", "TRUE or FALSE", mqtt_only_mode, 40);
+  WiFiManagerParameter custom_number_of_display_segments("number_of_display_segments", "4", number_of_display_segments, 3);
+  WiFiManagerParameter custom_number_of_marquee_repetitions("number_of_marquee_repetitions", "2", number_of_marquee_repetitions, 10);
+  WiFiManagerParameter custom_marquee_speed("marquee_speed", "40", marquee_speed, 10);
 
   WiFiManager wifiManager;
-
-  wifiManager.resetSettings();
+  //wifiManager.resetSettings();
 
   if (DEBUG_LEVEL < 1) {
     wifiManager.setDebugOutput(false);
@@ -620,14 +674,28 @@ void reconnectWiFi(void) {
   wifiManager.setSaveConfigCallback(saveConfigCallback);
 
   //add all your parameters here
+  wifiManager.addParameter(&custom_text_mqtt_server_address);
   wifiManager.addParameter(&custom_mqtt_server_adress);
+  wifiManager.addParameter(&custom_text_mqtt_server_port);
   wifiManager.addParameter(&custom_mqtt_port);
+  wifiManager.addParameter(&custom_text_mqtt_server_user);
   wifiManager.addParameter(&custom_mqtt_user);
+  wifiManager.addParameter(&custom_text_mqtt_server_password);
   wifiManager.addParameter(&custom_mqtt_password);
+  wifiManager.addParameter(&custom_text_mqtt_message_topic);
   wifiManager.addParameter(&custom_mqtt_message_topic);
+  wifiManager.addParameter(&custom_text_ntp_server_address);
   wifiManager.addParameter(&custom_ntp_server_adress);
+  wifiManager.addParameter(&custom_text_offline_mode);
   wifiManager.addParameter(&custom_offline_mode);
+  wifiManager.addParameter(&custom_text_mqtt_only_mode);
   wifiManager.addParameter(&custom_mqtt_only_mode);
+  wifiManager.addParameter(&custom_text_number_of_display_segmetns);
+  wifiManager.addParameter(&custom_number_of_display_segments);
+  wifiManager.addParameter(&custom_text_marquee_repetition_count);
+  wifiManager.addParameter(&custom_number_of_marquee_repetitions);
+  wifiManager.addParameter(&custom_text_marquee_animation_speed);
+  wifiManager.addParameter(&custom_marquee_speed);
 
   wifiManager.autoConnect("MatrixClock");
 
@@ -640,6 +708,9 @@ void reconnectWiFi(void) {
   strcpy(ntp_server_adress, custom_ntp_server_adress.getValue());
   strcpy(offline_mode, custom_offline_mode.getValue());
   strcpy(mqtt_only_mode, custom_mqtt_only_mode.getValue());
+  strcpy(number_of_display_segments, custom_number_of_display_segments.getValue());
+  strcpy(number_of_marquee_repetitions, custom_number_of_marquee_repetitions.getValue());
+  strcpy(marquee_speed, custom_marquee_speed.getValue());
 
   //save the custom parameters to FS
   if (shouldSaveConfig) {
@@ -654,6 +725,22 @@ void reconnectWiFi(void) {
     json["ntp_server_adress"] = ntp_server_adress;
     json["offline_mode"] = offline_mode;
     json["mqtt_only_mode"] = mqtt_only_mode;
+    json["number_of_display_segments"] = number_of_display_segments;
+    json["number_of_marquee_repetitions"] = number_of_marquee_repetitions;
+    json["marquee_speed"] = marquee_speed;
+
+    if (atoi(number_of_display_segments) > 0) {
+      LEDMATRIX_SEGMENTS = atoi(number_of_display_segments);
+    }
+
+    if (atoi(number_of_marquee_repetitions) > 0) {
+      REPETITIONS = atoi(number_of_marquee_repetitions);
+      PREVIOUS_REPETITIONS = REPETITIONS;
+    }
+
+    if (atoi(marquee_speed) > 0) {
+      ANIM_DELAY = atoi(marquee_speed);
+    }
 
     File configFile = SPIFFS.open("/config.json", "w");
     if (!configFile) {
@@ -667,40 +754,45 @@ void reconnectWiFi(void) {
     //end save
   }
 
-  Serial.print("WiFi connected ");
-
-  Serial.print("IP number assigned by DHCP is ");
-  Serial.println(WiFi.localIP());
-  Serial.print("Starting UDP, ");
+  debugPrint(true, "WIFI IP", WiFi.localIP().toString(), true, 0);
+  debugPrint(true, "STARTING UDP PORT", String(localPort), true, 0);
   Udp.begin(localPort);
 
-  delay(500);
   WiFireconnectCounter++;
+
+  if (WiFi.status() == WL_CONNECTED) {
+    debugPrint(true, "WIFI", "CONNECTED", true, 0);
+    return true;
+  }
+  else {
+    debugPrint(true, "WIFI", "NOT CONNECTED", true, 0);
+    debugPrint(true, "WIFI STATUS", String(WiFi.status()), true, 0);
+    return false;
+  }
 }
 
 // reconnect to MQTT
 void reconnectMQTT(void) {
   // Loop until we're reconnected
   if (strcmp ("ONLINE", offline_mode) == 0) {
-    Serial.print("MQTT-Connecting to: ");
-    Serial.print(mqtt_server_adress);
-    Serial.print(":");
+    debugPrint(true, "MQTT SERVER", String(mqtt_server_adress) + ":" + String(mqtt_port), false, 0);
+
     int port = atoi(mqtt_port);
-    Serial.print(port);
+
     while (!mqtt.connected()) {
-      Serial.print(" _*_");
+      debugPrint(false, "", "_*_", false, 0);
       String client_ID = "ESP-";
       client_ID += long(ESP.getChipId());
       char msg[20];
       client_ID.toCharArray(msg, client_ID.length() + 1);
       if (mqtt.connect(msg, mqtt_user, mqtt_password)) {
-
         mqtt.subscribe(mqtt_message_topic);
       }
+      debugPrint(false, "", "", true, 0);
       delay(500);
       MQTTreconnectCounter ++;
     }
-    Serial.print(" connected");
+    debugPrint(true, "MQTT", "CONNECTED" , true, 0);
     if (MQTTreconnectCounter > (10000 / 500)) {
       reconnectWiFi();
     }
@@ -709,7 +801,7 @@ void reconnectMQTT(void) {
     }
   }
   else {
-    Serial.print("MQTT disabled");
+    debugPrint(true, "MQTT", "DISABLED", false, 0);
   }
 }
 
@@ -727,4 +819,85 @@ void printDateTime(time_t t)
   Serial.print(monthShortStr(month(t)));
   Serial.print("/");
   Serial.print(year(t));
+}
+
+String getValue(String data, char separator, int index)
+{
+  int found = 0;
+  int strIndex[] = { 0, -1 };
+  int maxIndex = data.length() - 1;
+
+  for (int i = 0; i <= maxIndex && found <= index; i++) {
+    if (data.charAt(i) == separator || i == maxIndex) {
+      found++;
+      strIndex[0] = strIndex[1] + 1;
+      strIndex[1] = (i == maxIndex) ? i + 1 : i;
+    }
+  }
+  return found > index ? data.substring(strIndex[0], strIndex[1]) : "";
+}
+
+void resetHandler(String type) {
+  if (type == "FACTORY") {
+    debugPrint(true, "RESET HANDLER", "---------PERFORMING FACTORY RESET!!!-------------------------", false, 0);
+    SPIFFS.format();
+    WiFiManager wifiManager;
+    wifiManager.resetSettings();
+  }
+  if (type == "SPIFFS") {
+    debugPrint(true, "RESET HANDLER", "---------FORMATTING SPIFFS!!!--------------------------------", false, 0);
+    SPIFFS.format();
+  }
+  if (type == "WIFI") {
+    debugPrint(true, "RESET HANDLER", "---------RESETING WIFI!!!------------------------------------", false, 0);
+    WiFiManager wifiManager;
+    wifiManager.resetSettings();
+  }
+  debugPrint(true, "RESET HANDLER", "---------PERFORMING RESTART!!!-------------------------------", false, 0);
+  debugPrint(true, "RESET HANDLER", "---------PLEASE DO MANUAL RESTART IF THIS HANGS--------------", false, 0);
+  debugPrint(true, "RESET HANDLER", "---------THIS IS KNOWN PROBLEM ON ESP8266--------------------", false, 0);
+  debugPrint(true, "RESET HANDLER", "---------AND SHOULD APPEAR ONLY ONCE AFTER FW UPLOAD---------", false, 0);
+
+  //ESP.restart();
+
+  pinMode(D0, OUTPUT);
+  digitalWrite(D0, LOW);
+}
+
+bool debugPrint(bool t, String ID, String message, bool newline, int level) {
+#ifndef DEBUG_LEVEL
+#define DEBUG_LEVEL 1
+#endif
+
+  if (DEBUG_LEVEL >= level) {
+    if (t) {
+      Serial.print("[");
+      Serial.print(hour());
+      printDigits(minute());
+      printDigits(second());
+      Serial.print(" ");
+      Serial.print(day());
+      Serial.print(".");
+      Serial.print(month());
+      Serial.print(".");
+      Serial.print(year());
+      Serial.print("]");
+    }
+    if (ID != "") {
+      Serial.print("[");
+      Serial.print(ID);
+      Serial.print("][");
+      Serial.print(message);
+      Serial.print("]");
+    }
+    else {
+      Serial.print(message);
+    }
+    if (newline)
+      Serial.println();
+    else
+      Serial.print(" ");
+    return true;
+  }
+  return false;
 }

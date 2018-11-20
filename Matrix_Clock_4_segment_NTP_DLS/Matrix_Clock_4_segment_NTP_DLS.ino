@@ -2,6 +2,8 @@
   YAEC-4 (Yet Another Esp8266 Clock with 4 "segments" of dot matrix 8x8 display)
 
   NTP Matrix clock with WiFiManager support, daylightsaving support, LDR backlight adjustment and MQTT marquee message
+
+  https://github.com/owarek/matrixClock4s
 */
 #include <FS.h>                  //this needs to be first, or it all crashes and burns...
 #include <TimeLib.h>
@@ -14,9 +16,10 @@
 #include <ArduinoJson.h>         //https://github.com/bblanchon/ArduinoJson
 #include <PubSubClient.h>        //https://github.com/knolleary/pubsubclient
 #include "TimerObject.h"         //https://playground.arduino.cc/Code/ArduinoTimerObject
-#include <LEDMatrixDriver.hpp>   //https://github.com/bartoszbielawski/LEDMatrixDriver/blob/master/src/LEDMatrixDriver.hpp
+#include <MD_Parola.h>           //https://github.com/MajicDesigns/MD_Parola
+#include <MD_MAX72xx.h>          //https://github.com/MajicDesigns/MD_MAX72XX
 #include <Time.h>
-
+//----------------------------------------------------------------------------------------------------------
 #define DEBUG_LEVEL 1 // 0, 1 or 2
 
 // values for WiFiManager setup
@@ -26,21 +29,21 @@ char mqtt_port[6] = "";
 char mqtt_user[40] = "";
 char mqtt_password[40] = "";
 char mqtt_message_topic[40] = "";
-char ntp_server_adress[40] = "";
-char offline_mode[40] = "";
-char mqtt_only_mode[40] = "";
-char number_of_display_segments[3] = "";
-char number_of_marquee_repetitions[10] = "";
-char marquee_speed[10] = "";
+char ntp_server_adress[40] = "pool.ntp.org";
+char offline_mode[40] = "ONLINE";
+char mqtt_only_mode[40] = "FALSE";
+char number_of_display_segments[3] = "4";
+char number_of_marquee_repetitions[10] = "2";
+char marquee_speed[10] = "25";
 
-//LED matrix definition
-// Define the ChipSelect pin for the led matrix (Dont use the SS or MISO pin of your Arduino!)
-// Other pins are arduino specific SPI pins (MOSI=DIN of the LEDMatrix and CLK) see https://www.arduino.cc/en/Reference/SPI
-const uint8_t LEDMATRIX_CS_PIN = D3;
-// Define LED Matrix dimensions (0-n) - eg: 32x8 = 31x7
-int LEDMATRIX_SEGMENTS = 4;
-const int LEDMATRIX_HEIGHT = 7;
-const int LEDMATRIX_WIDTH = (LEDMATRIX_SEGMENTS * 8) - 1;
+// Define the number of devices we have in the chain and the hardware interface
+// NOTE: These pin numbers will probably not work with your hardware and may
+// need to be adapted
+#define HARDWARE_TYPE MD_MAX72XX::FC16_HW
+unsigned int MAX_DEVICES = 4;
+#define CLK_PIN   D5
+#define DATA_PIN  D7
+#define CS_PIN    D3
 
 // TIMEZONE AND DLS SETUP
 TimeChangeRule CEST = {"CEST", Last, Sun, Mar, 2, 120};     // Central European Summer Time
@@ -50,106 +53,14 @@ Timezone CE(CEST, CET);                                     // Central European 
 // DISPLAY SPEED
 unsigned long ANIM_DELAY = 40;               // marquee animation speed
 unsigned long REPETITIONS = 2;               // number of marquee repetition
-const int DOT_DELAY = 500;         // dot blink speed
+const int DOT_DELAY = 500;                   // dot blink speed
 
-// This is the font definition. You can use http://gurgleapps.com/tools/matrix to create your own font or sprites.
-// If you like the font feel free to use it. I created it myself and donate it to the public domain.
-byte font[95][8] = { {0, 0, 0, 0, 0, 0, 0, 0}, // SPACE
-  {0x10, 0x18, 0x18, 0x18, 0x18, 0x00, 0x18, 0x18}, // !
-  {0x28, 0x28, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00}, // :
-  {0x00, 0x0a, 0x7f, 0x14, 0x28, 0xfe, 0x50, 0x00}, // #
-  {0x10, 0x38, 0x54, 0x70, 0x1c, 0x54, 0x38, 0x10}, // $
-  {0x00, 0x60, 0x66, 0x08, 0x10, 0x66, 0x06, 0x00}, // %
-  {0, 0, 0, 0, 0, 0, 0, 0}, // &
-  {0x00, 0x10, 0x18, 0x18, 0x08, 0x00, 0x00, 0x00}, // '
-  {0x02, 0x04, 0x08, 0x08, 0x08, 0x08, 0x08, 0x04}, // (
-  {0x40, 0x20, 0x10, 0x10, 0x10, 0x10, 0x10, 0x20}, // )
-  {0x00, 0x10, 0x54, 0x38, 0x10, 0x38, 0x54, 0x10}, // *
-  {0x00, 0x08, 0x08, 0x08, 0x7f, 0x08, 0x08, 0x08}, // +
-  {0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x08}, // ,
-  {0x00, 0x00, 0x00, 0x00, 0x7e, 0x00, 0x00, 0x00}, // -
-  {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06}, // .
-  {0x00, 0x04, 0x04, 0x08, 0x10, 0x20, 0x40, 0x40}, // /
-  {0x38, 0x44, 0x4c, 0x5c, 0x74, 0x64, 0x44, 0x38}, // 0
-  {0x04, 0x0c, 0x14, 0x24, 0x04, 0x04, 0x04, 0x04}, // 1
-  {0x78, 0x44, 0x04, 0x04, 0x3c, 0x40, 0x40, 0x7c}, // 2
-  {0x7c, 0x44, 0x04, 0x3c, 0x04, 0x04, 0x44, 0x7c}, // 3
-  {0x40, 0x40, 0x40, 0x48, 0x48, 0x7c, 0x08, 0x08}, // 4
-  {0x7c, 0x40, 0x40, 0x78, 0x04, 0x04, 0x04, 0x78}, // 5
-  {0x38, 0x44, 0x40, 0x78, 0x44, 0x44, 0x44, 0x38}, // 6
-  {0x7c, 0x04, 0x08, 0x08, 0x10, 0x10, 0x10, 0x10}, // 7
-  {0x38, 0x44, 0x44, 0x38, 0x38, 0x44, 0x44, 0x38}, // 8
-  {0x38, 0x44, 0x44, 0x44, 0x3c, 0x04, 0x04, 0x38}, // 9
-  {0x00, 0x18, 0x18, 0x00, 0x00, 0x18, 0x18, 0x00}, // :
-  {0x00, 0x18, 0x18, 0x00, 0x00, 0x18, 0x18, 0x08}, // ;
-  {0x00, 0x10, 0x20, 0x40, 0x80, 0x40, 0x20, 0x10}, // <
-  {0x00, 0x00, 0x7e, 0x00, 0x00, 0xfc, 0x00, 0x00}, // =
-  {0x00, 0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08}, // >
-  {0x00, 0x38, 0x44, 0x04, 0x08, 0x10, 0x00, 0x10}, // ?
-  {0x00, 0x30, 0x48, 0xba, 0xba, 0x84, 0x78, 0x00}, // @
-  {0x00, 0x1c, 0x22, 0x42, 0x42, 0x7e, 0x42, 0x42}, // A
-  {0x00, 0x78, 0x44, 0x44, 0x78, 0x44, 0x44, 0x7c}, // B
-  {0x00, 0x3c, 0x44, 0x40, 0x40, 0x40, 0x44, 0x7c}, // C
-  {0x00, 0x7c, 0x42, 0x42, 0x42, 0x42, 0x44, 0x78}, // D
-  {0x00, 0x78, 0x40, 0x40, 0x70, 0x40, 0x40, 0x7c}, // E
-  {0x00, 0x7c, 0x40, 0x40, 0x78, 0x40, 0x40, 0x40}, // F
-  {0x00, 0x3c, 0x40, 0x40, 0x5c, 0x44, 0x44, 0x78}, // G
-  {0x00, 0x42, 0x42, 0x42, 0x7e, 0x42, 0x42, 0x42}, // H
-  {0x00, 0x7c, 0x10, 0x10, 0x10, 0x10, 0x10, 0x7e}, // I
-  {0x00, 0x7e, 0x02, 0x02, 0x02, 0x02, 0x04, 0x38}, // J
-  {0x00, 0x44, 0x48, 0x50, 0x60, 0x50, 0x48, 0x44}, // K
-  {0x00, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x7c}, // L
-  {0x00, 0x82, 0xc6, 0xaa, 0x92, 0x82, 0x82, 0x82}, // M
-  {0x00, 0x42, 0x42, 0x62, 0x52, 0x4a, 0x46, 0x42}, // N
-  {0x00, 0x3c, 0x42, 0x42, 0x42, 0x42, 0x44, 0x38}, // O
-  {0x00, 0x78, 0x44, 0x44, 0x48, 0x70, 0x40, 0x40}, // P
-  {0x00, 0x3c, 0x42, 0x42, 0x52, 0x4a, 0x44, 0x3a}, // Q
-  {0x00, 0x78, 0x44, 0x44, 0x78, 0x50, 0x48, 0x44}, // R
-  {0x00, 0x38, 0x40, 0x40, 0x38, 0x04, 0x04, 0x78}, // S
-  {0x00, 0x7e, 0x90, 0x10, 0x10, 0x10, 0x10, 0x10}, // T
-  {0x00, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x3e}, // U
-  {0x00, 0x42, 0x42, 0x42, 0x42, 0x44, 0x28, 0x10}, // V
-  {0x80, 0x82, 0x82, 0x92, 0x92, 0x92, 0x94, 0x78}, // W
-  {0x00, 0x42, 0x42, 0x24, 0x18, 0x24, 0x42, 0x42}, // X
-  {0x00, 0x44, 0x44, 0x28, 0x10, 0x10, 0x10, 0x10}, // Y
-  {0x00, 0x7c, 0x04, 0x08, 0x7c, 0x20, 0x40, 0xfe}, // Z
-  {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, //
-  {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, //
-  {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, //
-  {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, //
-  {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, //
-  {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, //
-  {0x00, 0x1c, 0x22, 0x02, 0x02, 0x3e, 0x22, 0x3e}, // a
-  {0x00, 0x20, 0x20, 0x20, 0x20, 0x3e, 0x22, 0x3e}, // b
-  {0x00, 0x1e, 0x20, 0x20, 0x20, 0x20, 0x20, 0x1e}, // c
-  {0x00, 0x02, 0x02, 0x02, 0x1e, 0x22, 0x22, 0x1e}, // d
-  {0x00, 0x1c, 0x22, 0x22, 0x3c, 0x20, 0x20, 0x1e}, // e
-  {0x00, 0x3c, 0x24, 0x20, 0x70, 0x20, 0x20, 0x20}, // f
-  {0x00, 0x1c, 0x22, 0x22, 0x22, 0x1e, 0x02, 0x1c}, // g
-  {0x00, 0x20, 0x20, 0x20, 0x3c, 0x22, 0x22, 0x22}, // h
-  {0x00, 0x20, 0x00, 0x20, 0x20, 0x20, 0x20, 0x20}, // i
-  {0x00, 0x04, 0x00, 0x04, 0x04, 0x04, 0x24, 0x18}, // j
-  {0x00, 0x44, 0x48, 0x50, 0x60, 0x50, 0x48, 0x44}, // k
-  {0x00, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40}, // l
-  {0x00, 0x00, 0x28, 0x54, 0x54, 0x54, 0x54, 0x54}, // m
-  {0x00, 0x00, 0x20, 0x50, 0x50, 0x50, 0x50, 0x50}, // n
-  {0x00, 0x30, 0x48, 0x48, 0x48, 0x48, 0x48, 0x30}, // o
-  {0x00, 0x30, 0x48, 0x48, 0x70, 0x40, 0x40, 0x40}, // p
-  {0x00, 0x00, 0x30, 0x48, 0x48, 0x38, 0x08, 0x08}, // q
-  {0x00, 0x00, 0x30, 0x48, 0x40, 0x40, 0x40, 0x40}, // r
-  {0x00, 0x18, 0x24, 0x20, 0x18, 0x04, 0x24, 0x18}, // s
-  {0x00, 0x00, 0x20, 0x70, 0x20, 0x20, 0x24, 0x18}, // t
-  {0x00, 0x00, 0x00, 0x24, 0x24, 0x24, 0x24, 0x18}, // u
-  {0x00, 0x00, 0x00, 0x28, 0x28, 0x28, 0x28, 0x10}, // v
-  {0x00, 0x00, 0x00, 0x2a, 0x2a, 0x2a, 0x2a, 0x14}, // w
-  {0x00, 0x00, 0x00, 0x28, 0x28, 0x10, 0x28, 0x28}, // x
-  {0x00, 0x00, 0x00, 0x28, 0x28, 0x10, 0x10, 0x10}, // y
-  {0x00, 0x00, 0x00, 0x78, 0x48, 0x10, 0x28, 0x78}, // z
-  // (the font does not contain any lower case letters. you can add your own.)
-};    // {}, //
+// LED CLOCK MOVING SEMICOLON SYMBOLS
+uint8_t semi1[] = { 2, 24, 24}; // semicolon
+uint8_t semi2[] = { 2, 36, 36}; // longer semicolon
+
 // OBJECT INITIALISATIONS
-// The LEDMatrixDriver class instance
-LEDMatrixDriver lmd(LEDMATRIX_SEGMENTS, LEDMATRIX_CS_PIN);
+MD_Parola P = MD_Parola(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
 WiFiUDP Udp;
 TimeChangeRule *tcr;
 WiFiClient espClient;
@@ -173,7 +84,7 @@ bool boolMarquee  = false;                          // marquee animation flag
 unsigned int h = 00;                                // actual hour
 unsigned int m = 00;                                // actual minute
 unsigned int s = 00;                                // actual second
-char text[] = "000000";                             // display text holder
+char text[100] = "";                                // display text holder
 time_t prevDisplay = 0;                             // when the digital clock was displayed
 const int NTP_PACKET_SIZE = 48;                     // NTP time is in the first 48 bytes of message
 byte packetBuffer[NTP_PACKET_SIZE];                 // buffer to hold incoming & outgoing packets
@@ -184,6 +95,7 @@ unsigned long PREVIOUS_REPETITIONS = REPETITIONS;   // store actual count of rep
 //-------------------------------------------------------------------------------------------
 void setup()
 {
+  pinMode(A0, INPUT);
   time_t myTimeStatus;
   messageSize = 100;
   clearMessage();
@@ -193,14 +105,13 @@ void setup()
   delay(250);
   debugPrint(true, "MATRIX CLOCK", "PROGRAM START", true, 0);
 
-  lmd.setEnabled(true);
-  lmd.setIntensity(10);   // 0 = low, 10 = high
+  P.begin();
+  P.addChar('^', semi1);
+  P.addChar('$', semi2);
+  P.setIntensity(15);   // 0 = low, 15 = high
+  P.displayText("FS", PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
+  P.displayAnimate();
 
-  drawString("FS    ", LEDMATRIX_SEGMENTS, 0, 0);
-  lmd.display();
-
-  //clean FS, for testing
-  //SPIFFS.format();
   //read configuration from FS json
   while (reconnectWiFi() == false) {
     //loop until we are connected to WiFi
@@ -210,24 +121,24 @@ void setup()
   debugPrint(false, "NTP SERVER ADDRESS", String(ntp_server_adress), false, 0);
   debugPrint(false, "NTP", "WAITING FOR SYNC", true, 0);
 
-  drawString("NTP   ", LEDMATRIX_SEGMENTS, 0, 0);
-  lmd.display();
+  P.displayText("NTP", PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
+  P.displayAnimate();
 
   delay(1000);
 
   setSyncProvider(getNtpTime);
 
   while (myTimeStatus == timeNotSet) {
-    drawString("DEAD  ", LEDMATRIX_SEGMENTS, 0, 0);
     myTimeStatus = getNtpTime();
-    lmd.display();
+    P.displayText("DEAD", PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
+    P.displayAnimate();
     delay(5000);
   }
 
   int port = atoi(mqtt_port);
 
-  drawString("MQTT  ", LEDMATRIX_SEGMENTS, 0, 0);
-  lmd.display();
+  P.displayText("MQTT", PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
+  P.displayAnimate();
 
   mqtt.setServer(mqtt_server_adress, port);
   mqtt.setCallback(mqttCallback);
@@ -236,138 +147,89 @@ void setup()
 
   debugPrint(true, "MATRIX CLOCK", "1...2...3...GO", true, 0);
 
-  drawString(" GO   ", LEDMATRIX_SEGMENTS, 0, 0);
-  lmd.display();
+  P.displayText("GO", PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
+  P.displayAnimate();
   delay(1000);
 
   timerDot->Start();
   timerMarquee->Start();
-  pinMode(A0, INPUT);
 }
 
 void loop() {
   mqtt.loop();
+
   if  (!mqtt.connected() && (strcmp ("ONLINE", offline_mode) == 0)) {
     debugPrint(true, "MQTT", "DISCONNECTED", true, 0);
-    drawString("OFFLINE", LEDMATRIX_SEGMENTS, 0, 0);
-    lmd.display();
+    P.displayText("OFFLINE", PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
+    P.displayAnimate();
     reconnectMQTT();
   }
+
   String textStr = "";
 
-  if (boolSwitch == true) {
-    // display marquee
-
-    intensity += 2;
-    intensity = constrain(intensity, 0, 10);
-    lmd.setIntensity(intensity); // 0 = low, 10 = high
-
-    drawString("    ", LEDMATRIX_SEGMENTS, 0, 0);
-
-    if (checkMessage()) {
-      if ((repetitionsCounter < REPETITIONS) || strcmp ("TRUE", mqtt_only_mode) == 0) {
-        if (boolMarquee == true) {
-          boolMarquee = false;
-          debugPrint(false, "", ".", false, 2);
-          drawString(message, messageSize, x, 0);
-          lmd.display();
-          // Advance to next coordinate
-          if ( --x < messageSize * -8 ) {
-            x = LEDMATRIX_WIDTH;
-            repetitionsCounter++;
-            debugPrint(false, "", "", true, 2);
-            debugPrint(true, "REPETITIONS", String(repetitionsCounter) + "/" + String(repetitionsCounter), true, 0);
-          }
-        }
-      }
-      else {
-        clearMessage();
-        repetitionsCounter = 0;
-        boolSwitch = false;
-      }
+  if (boolSwitch == true || strcmp ("TRUE", mqtt_only_mode) == 0) {
+    // DISPLAY MARQUEE
+    if (P.displayAnimate()) {
+      repetitionsCounter++;
+      debugPrint(true, "REPETITIONS", String(repetitionsCounter) + "/" + String(REPETITIONS), true, 0);
+      P.displayText(message, PA_LEFT, ANIM_DELAY, 1000, PA_SCROLL_LEFT, PA_SCROLL_DOWN);
     }
-    else {
+    if (repetitionsCounter >= REPETITIONS && strcmp ("FALSE", mqtt_only_mode) == 0) {
       boolSwitch = false;
+      clearMessage();
     }
   }
   else {
-    // display time
+    // DISPLAY TIME
     if (timeStatus() != timeNotSet) {
       if (now() != prevDisplay) { //update the display only if time has changed
         prevDisplay = now();
         debugPrint(true, "", "", true, 0);
-
-        h = hour();
-        m = minute();
-        s = second();
-
-        if (h < 10) {
-          textStr += String(0);
-        }
-        textStr += String(h);
-        if (m < 10) {
-          textStr += String(0);
-        }
-        textStr += String(m);
-        if (s < 10) {
-          textStr += String(0);
-        }
-        textStr += String(s);
-
-        for (int i = 0; i < LEDMATRIX_SEGMENTS; i++) {
-          text[i] = textStr[i];
-        }
-        drawString(text, LEDMATRIX_SEGMENTS, 0, 0);
       }
-    }
-    if (boolDot == true) {
-      boolDot = false;
-      debugPrint(true, "DISPLAY DEBUG", "--DOT--", true, 2);
-      if (dot == 0) {
-        lmd.setPixel(15, 1, true);
-        lmd.setPixel(15, 2, true);
-        lmd.setPixel(15, 5, true);
-        lmd.setPixel(15, 6, true);
-        if (LEDMATRIX_SEGMENTS > 4) {
-          lmd.setPixel(31, 1, false);
-          lmd.setPixel(31, 2, false);
-          lmd.setPixel(31, 5, false);
-          lmd.setPixel(31, 6, false);
-        }
-        dot = 1;
+
+      h = hour();
+      m = minute();
+      s = second();
+
+      if (boolDot == true) {
+        textStr += convertDigitsNoColon(h);
+        textStr += "$";
+        textStr += convertDigitsNoColon(m);
       }
-      else {
-        lmd.setPixel(15, 1, false);
-        lmd.setPixel(15, 2, false);
-        lmd.setPixel(15, 5, false);
-        lmd.setPixel(15, 6, false);
-        if (LEDMATRIX_SEGMENTS > 4) {
-          lmd.setPixel(31, 1, true);
-          lmd.setPixel(31, 2, true);
-          lmd.setPixel(31, 5, true);
-          lmd.setPixel(31, 6, true);
-        }
-        dot = 0;
+      else
+      {
+        textStr += convertDigitsNoColon(h);
+        textStr += "^";
+        textStr += convertDigitsNoColon(m);
+
+        intensity = map(analogRead(A0), 0, 1023, 0, 15);
+        intensity = constrain(intensity, 0, 15);
+        P.setIntensity(intensity);
       }
-      intensity = map(analogRead(A0), 0, 1023, 0, 10);
-      intensity = constrain(intensity, 0, 10);
-      lmd.setIntensity(intensity);
-      lmd.display();
+
+      for (int i = 0; i < textStr.length(); i++) {
+        text[i] = textStr[i];
+      }
+      P.displayText(text, PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
+      P.displayAnimate();
     }
   }
   TimerUpdate();
 }
-
 //-------------------------------------------------------------------------------------------
 //dot timer callback
 void updateDot(void) {
-  boolDot = true;
+  if (boolDot == true) {
+    boolDot = false;
+  }
+  else {
+    boolDot = true;
+  }
 }
 
 //switch timer callback
 void updateSwitch(void) {
   boolSwitch = true;
-  debugPrint(true, "MARQUEE DEBUG", "--MARQUEE--", true, 2);
 }
 
 //marquee timer callback
@@ -382,10 +244,11 @@ void saveConfigCallback () {
 }
 
 // callback for incomming MQTT messages
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
+void mqttCallback(char* topic, byte * payload, unsigned int length) {
   String top = topic;
   String incom;
   String incomMarquee;
+  String outputMessage;
 
   if (top == mqtt_message_topic) {
     repetitionsCounter = 0;
@@ -394,10 +257,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       incom += (char)payload[i];
     }
 
-    if (getValue(incom, '*', 1) == "1") {
+    if (getValue(incom, '*', 1) == "MQTTONLY") {
       getValue(incom, '*', 2).toCharArray(mqtt_only_mode, getValue(incom, '*', 2).length() + 1);
 
-      for (int i = 0; i < LEDMATRIX_SEGMENTS - 1; i++) {
+      for (int i = 0; i < MAX_DEVICES - 1; i++) {
         incomMarquee += ' ';
       }
       incomMarquee += getValue(incom, '*', 3);
@@ -406,20 +269,20 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
       REPETITIONS = 0;
     }
-    else if ( getValue(incom, '*', 1) == "0") {
+    else if ( getValue(incom, '*', 1) == "REPETITIONS") {
 
       PREVIOUS_REPETITIONS = REPETITIONS;
       REPETITIONS = getValue(incom, '*', 2).toInt();
       memcpy(mqtt_only_mode, "FALSE", 5);
 
-      for (int i = 0; i < LEDMATRIX_SEGMENTS - 1; i++) {
+      for (int i = 0; i < MAX_DEVICES - 1; i++) {
         incomMarquee += ' ';
       }
       incomMarquee += getValue(incom, '*', 3);
       incomMarquee.toCharArray(message, incomMarquee.length() + 1);
       messageSize = incomMarquee.length();
     }
-    else if (getValue(incom, '*', 1) == "2") {
+    else if (getValue(incom, '*', 1) == "RESET") {
       switch (REPETITIONS = getValue(incom, '*', 2).toInt()) {
         case 0:
           resetHandler("FACTORY");
@@ -431,31 +294,44 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
           resetHandler("WIFI");
           break;
       }
-
     }
     else {
-      REPETITIONS = PREVIOUS_REPETITIONS;
-      memcpy(mqtt_only_mode, "FALSE", 5);
+      REPETITIONS = 2;
+      PREVIOUS_REPETITIONS = REPETITIONS;
+
+      for (int i = 0; i < MAX_DEVICES - 1; i++) {
+        incomMarquee += ' ';
+      }
 
       for (int i = 0; i < length; i++) {
-        message[i + LEDMATRIX_SEGMENTS - 1] = (char)payload[i];
-        messageSize = length + LEDMATRIX_SEGMENTS - 1;
+        incomMarquee += (char)payload[i];
       }
+
+      incomMarquee.toCharArray(message, incomMarquee.length() + 1);
+      messageSize = incomMarquee.length();
+
+      memcpy(mqtt_only_mode, "FALSE", 5);
     }
     updateSwitch();
+
+    debugPrint(true, "MESSAGE TOPIC", topic, false, 0);
+    debugPrint(false, "MESSAGE SIZE", String(messageSize), false, 0);
+    debugPrint(false, "MESSAGE PAYLOAD", String(incom), true, 0);
+
+    debugPrint(true, "PARSED MESSAGE", getValue(incom, '*', 1) + "--" + getValue(incom, '*', 2) + "--" + getValue(incom, '*', 3) + "--", false, 1);
+    debugPrint(false, "FINAL MESSAGE", message, true, 1);
+
+    debugPrint(true, "MARQUEE DEBUG", "--MARQUEE--", true, 2);
+
+    P.setIntensity(15); // 0 = low, 15 = high
+    P.displayClear();
+    P.displayText(message, PA_LEFT, ANIM_DELAY, 1000, PA_SCROLL_LEFT, PA_SCROLL_DOWN);
   }
-
-  debugPrint(true, "MESSAGE TOPIC", topic, false, 0);
-  debugPrint(false, "MESSAGE SIZE", String(messageSize), false, 0);
-  debugPrint(false, "MESSAGE PAYLOAD", String(incom), true, 0);
-
-  debugPrint(true, "PARSED MESSAGE", getValue(incom, '*', 1) + "--" + getValue(incom, '*', 2) + "--" + getValue(incom, '*', 3) + "--", false, 1);
-  debugPrint(false, "FINAL MESSAGE", message, true, 1);
 }
 
 // clearing of mqtt message
 void clearMessage(void) {
-  for (int i = 0; i < messageSize - 1; i++) {
+  for (int i = 0; i < messageSize; i++) {
     message[i] = ' ';
   }
   messageSize = 0;
@@ -463,43 +339,32 @@ void clearMessage(void) {
 
 // checking if there is some mqtt message to marquee
 bool checkMessage(void) {
-  //  for (int i = 0; i < 19; i++) {
-  //    if (message[i] != ' ')
-  //      return true;
-  //  }
-  //  return false;
   if (messageSize > 0) {
     return true;
   }
   return false;
 }
 
-// formating and printing actual time to Serial
-//void digitalClockDisplay() {
-//  // digital clock display of the time
-//  Serial.print(hour());
-//  printDigits(minute());
-//  printDigits(second());
-//  Serial.print(" ");
-//  Serial.print(day());
-//  Serial.print(".");
-//  Serial.print(month());
-//  Serial.print(".");
-//  Serial.print(year());
-//  Serial.println();
-//}
-
 // formating of time
-void printDigits(int digits) {
+String convertDigits(int digits) {
   // utility for digital clock display: prints preceding colon and leading 0
-  Serial.print(":");
+  String output = ":";
   if (digits < 10)
-    Serial.print('0');
-  Serial.print(digits);
+    output += "0";
+  output += String(digits);
+  return output;
 }
 
+String convertDigitsNoColon(int digits) {
+  // utility for digital clock display: prints preceding colon and leading 0
+  String output = "";
+  if (digits < 10)
+    output += "0";
+  output += String(digits);
+  return output;
+}
 // NTP time getter
-time_t getNtpTime() {
+time_t getNtpTime(void) {
   while (Udp.parsePacket() > 0) ; // discard any previously received packets
   debugPrint(false, "NTP", "TRANSMIT REQUEST", false, 0);
   sendNTPpacket();
@@ -516,9 +381,9 @@ time_t getNtpTime() {
       secsSince1900 |= (unsigned long)packetBuffer[42] << 8;
       secsSince1900 |= (unsigned long)packetBuffer[43];
       time_t utc = secsSince1900 - 2208988800UL;
-      printDateTime(utc);
+      debugPrint(false, "", printDateTime(utc), false, 0);
       debugPrint(false, "", " ---day light saving---> ", false, 0);
-      printDateTime(CE.toLocal(utc, &tcr));
+      debugPrint(false, "",  printDateTime(CE.toLocal(utc, &tcr)), false, 0);
       debugPrint(false, "", "", true, 0);
       return CE.toLocal(utc, &tcr);
     }
@@ -549,42 +414,6 @@ void sendNTPpacket(void) {
   Udp.endPacket();
 }
 
-// draw string to matrix display buffer
-void drawString(char* text, int len, int x, int y ) {
-  for ( int idx = 0; idx < len; idx ++ )
-  {
-    int c = text[idx] - 32;
-
-    // stop if char is outside visible area
-    if ( x + idx * 8  > LEDMATRIX_WIDTH )
-      return;
-
-    // only draw if char is visible
-    if ( 8 + x + idx * 8 > 0 )
-      drawSprite( font[c], x + idx * 8, y, 8, 8 );
-  }
-}
-
-// draw sprite to matrix display buffer
-void drawSprite( byte* sprite, int x, int y, int width, int height ) {
-  // The mask is used to get the column bit from the sprite row
-  byte mask = B10000000;
-
-  for ( int iy = 0; iy < height; iy++ )
-  {
-    for ( int ix = 0; ix < width; ix++ )
-    {
-      lmd.setPixel(x + ix, y + iy, (bool)(sprite[iy] & mask ));
-
-      // shift the mask by one pixel to the right
-      mask = mask >> 1;
-    }
-
-    // reset column mask
-    mask = B10000000;
-  }
-}
-
 // update all timer objects
 void TimerUpdate(void) {
   timerDot->Update();
@@ -612,12 +441,12 @@ bool reconnectWiFi(void) {
         JsonObject& json = jsonBuffer.parseObject(buf.get());
         if (DEBUG_LEVEL > 1) {
           json.printTo(Serial);
-          Serial.println();
+          debugPrint(false, "", "", true, 0);
         }
         if (json.success()) {
           debugPrint(true, "SPIFFS", "PARSED JSON", true, 1);
-          drawString("FSOK  ", LEDMATRIX_SEGMENTS, 0, 0);
-          lmd.display();
+          P.displayText("FSOK", PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
+          P.displayAnimate();
 
           strcpy(mqtt_server_adress, json["mqtt_server_adress"]);
           strcpy(mqtt_port, json["mqtt_port"]);
@@ -636,8 +465,8 @@ bool reconnectWiFi(void) {
     debugPrint(true, "SPIFFS", "FAILED TO MOUNT FS", true, 0);
   }
   //end read
-  drawString("WIFI  ", LEDMATRIX_SEGMENTS, 0, 0);
-  lmd.display();
+  P.displayText("WIFI", PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
+  P.displayAnimate();
 
   WiFiManagerParameter custom_text_mqtt_server_address("<p>mqtt server address</p>");
   WiFiManagerParameter custom_text_mqtt_server_port("<p>mqtt server port</p>");
@@ -714,7 +543,7 @@ bool reconnectWiFi(void) {
 
   //save the custom parameters to FS
   if (shouldSaveConfig) {
-    Serial.println("saving config");
+    debugPrint(true, "SPIFFS", "SAVING CONFIG", true, 0);
     DynamicJsonBuffer jsonBuffer;
     JsonObject& json = jsonBuffer.createObject();
     json["mqtt_server_adress"] = mqtt_server_adress;
@@ -730,7 +559,7 @@ bool reconnectWiFi(void) {
     json["marquee_speed"] = marquee_speed;
 
     if (atoi(number_of_display_segments) > 0) {
-      LEDMATRIX_SEGMENTS = atoi(number_of_display_segments);
+      MAX_DEVICES = atoi(number_of_display_segments);
     }
 
     if (atoi(number_of_marquee_repetitions) > 0) {
@@ -744,11 +573,11 @@ bool reconnectWiFi(void) {
 
     File configFile = SPIFFS.open("/config.json", "w");
     if (!configFile) {
-      Serial.println("failed to open config file for writing");
+      debugPrint(true, "SPIFFS", "FAILED TO OPEN CONFIG FILE FOR WRITE", true, 0);
     }
 
     json.printTo(Serial);
-    Serial.println();
+    debugPrint(false, "", "", true, 0);
     json.printTo(configFile);
     configFile.close();
     //end save
@@ -805,22 +634,27 @@ void reconnectMQTT(void) {
   }
 }
 
-void printDateTime(time_t t)
+// date time formating
+String printDateTime(time_t t)
 {
-  Serial.print(hour(t));
-  printDigits(minute(t));
-  printDigits(second(t));
+  String output = "";
+  output += String(hour(t));
+  output += convertDigits(minute(t));
+  output += convertDigits(second(t));
 
-  Serial.print(" ");
-  Serial.print(dayShortStr(weekday(t)));
-  Serial.print("/");
-  Serial.print(day(t));
-  Serial.print("/");
-  Serial.print(monthShortStr(month(t)));
-  Serial.print("/");
-  Serial.print(year(t));
+  output += " ";
+  output += String(dayShortStr(weekday(t)));
+  output += "/";
+  output += String(day(t));
+  output += "/";
+  output += String(monthShortStr(month(t)));
+  output += "/";
+  output += String(year(t));
+
+  return output;
 }
 
+// message parser
 String getValue(String data, char separator, int index)
 {
   int found = 0;
@@ -837,6 +671,7 @@ String getValue(String data, char separator, int index)
   return found > index ? data.substring(strIndex[0], strIndex[1]) : "";
 }
 
+// handler for reset/restart/format requests
 void resetHandler(String type) {
   if (type == "FACTORY") {
     debugPrint(true, "RESET HANDLER", "---------PERFORMING FACTORY RESET!!!-------------------------", false, 0);
@@ -864,6 +699,7 @@ void resetHandler(String type) {
   digitalWrite(D0, LOW);
 }
 
+// formated debug serial output
 bool debugPrint(bool t, String ID, String message, bool newline, int level) {
 #ifndef DEBUG_LEVEL
 #define DEBUG_LEVEL 1
@@ -873,8 +709,8 @@ bool debugPrint(bool t, String ID, String message, bool newline, int level) {
     if (t) {
       Serial.print("[");
       Serial.print(hour());
-      printDigits(minute());
-      printDigits(second());
+      Serial.print(convertDigits(minute()));
+      Serial.print(convertDigits(second()));
       Serial.print(" ");
       Serial.print(day());
       Serial.print(".");

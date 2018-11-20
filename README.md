@@ -15,6 +15,6 @@ TODO:
 *Add WifiManager onDemand setting  
 *Add WifiManager setting for SPIFFS format  
 *Upload some Wifimanager settings screenshots   
-*Add support for cap. touch sensors
-*Add support for buzzer (Alarms)
-*Add support for Neopixels
+*Add support for cap. touch sensors  
+*Add support for buzzer (Alarms)  
+*Add support for Neopixels  

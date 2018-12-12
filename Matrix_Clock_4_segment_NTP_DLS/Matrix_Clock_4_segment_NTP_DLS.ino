@@ -62,9 +62,13 @@ unsigned long ANIM_DELAY = 40;               // marquee animation speed
 unsigned long REPETITIONS = 2;               // number of marquee repetition
 const int DOT_DELAY = 500;                   // dot blink speed
 
+// https://pjrp.github.io/MDParolaFontEditor
 // LED CLOCK MOVING SEMICOLON SYMBOLS
 uint8_t semi1[] = { 2, 24, 24 }; // semicolon
 uint8_t semi2[] = { 2, 36, 36 }; // longer semicolon
+// CHRISTMASS EDITION
+uint8_t tree[] = { 8, 64, 112, 124, 255, 255, 124, 112, 64 };
+uint8_t ball[] = { 8, 60, 82, 137, 145, 137, 145, 74, 60 };
 
 // OBJECT INITIALISATIONS
 MD_Parola* ptrToParola = NULL;
@@ -107,12 +111,14 @@ void setup()
 	//  resetHandler("WIFI");
 	//  SPIFFS.format();
 
-	ptrToParola = new MD_Parola(HARDWARE_TYPE, CS_PIN, 6);
-	ptrToParola->begin();
-	ptrToParola->addChar('^', semi1);
-	ptrToParola->addChar('$', semi2);
-	ptrToParola->setFont(ExtASCII);
-	ptrToParola->setIntensity(15);   // 0 = low, 15 = high
+	ptrToParola = new MD_Parola(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
+ 	ptrToParola->begin();
+  	ptrToParola->addChar('^', semi1);
+  	ptrToParola->addChar('$', semi2);
+  	ptrToParola->addChar('&', tree);
+  	ptrToParola->addChar('%', ball);
+  	ptrToParola->setFont(fontArabic);
+  	ptrToParola->setIntensity(15);   // 0 = low, 15 = high
 
 	pinMode(A0, INPUT);
 
@@ -133,12 +139,14 @@ void setup()
 	}
 
 	delete(ptrToParola);
-	ptrToParola = new MD_Parola(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
-	ptrToParola->begin();
-	ptrToParola->addChar('^', semi1);
-	ptrToParola->addChar('$', semi2);
-	ptrToParola->setFont(ExtASCII);
-	ptrToParola->setIntensity(15);
+  	ptrToParola = new MD_Parola(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
+  	ptrToParola->begin();
+  	ptrToParola->addChar('^', semi1);
+  	ptrToParola->addChar('$', semi2);
+  	ptrToParola->addChar('&', tree);
+  	ptrToParola->addChar('%', ball);
+  	ptrToParola->setFont(fontArabic);
+  	ptrToParola->setIntensity(15);
 
 	//debugPrint(PRINT_TIME_TRUE, "UDP PORT", String(Udp.localPort()), NEWLINE_FALSE, 0);
 	debugPrint(PRINT_TIME_FALSE, "NTP SERVER ADDRESS", String(ntp_server_adress), NEWLINE_FALSE, 0);

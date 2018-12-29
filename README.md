@@ -17,3 +17,9 @@ TODO:
 *Add support for cap. touch sensors or gesture sensor 
 *Add support for buzzer (Alarms)  
 *Add support for Neopixels  
+
+McHa added: 
+* directive ONE_DISPLAY for using the clock with only one matrix display (so it has to scroll to show all the numbers of the time)
+* with ONE_DISPLAY set beside the scrooling of the clock the date is shown from time to time
+* added font derived from classic VGA MS-DOS font CP437 by Nick Gammon (http://www.gammon.com.au/forum/?id=11516)
+* added directive HAS_AMBIENT for either to use photoresistor for ambient light detection on A0 or just to use default values of display intensity

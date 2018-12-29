@@ -39,24 +39,38 @@ char mqtt_message_topic[40] = "test/matrixclock/message";
 char ntp_server_adress[40] = "pool.ntp.org";
 char offline_mode[40] = "ONLINE";
 char mqtt_only_mode[40] = "FALSE";
-char number_of_display_segments[3] = "1";
 char number_of_marquee_repetitions[10] = "2";
+// char number_of_display_segments[3] = "4"; //defined later
 char marquee_speed[10] = "25";
+
+#define CLOCK_INTENSITY    1 // default LED intensity for the clock
+#define MESSAGE_INTENSITY 15 // default instensity for incomming MQTT messages 0 = low, 15 = high
+
+// use folowing define if you have only one display, than the clock has specific features, e.g. clock are also scrolling
+//#define ONE_DISPLAY  // if you have only one display
+//#define HAS_AMBIENT // if you have ambient light measurement
+
+#ifdef HAS_AMBIENT
+#define PR_PIN A0 //Photoresistor ambient light measurement pin
+#endif 
 
 // Define the number of devices we have in the chain and the hardware interface
 // NOTE: These pin numbers will probably not work with your hardware and may
 // need to be adapted
-//#define HARDWARE_TYPE MD_MAX72XX::FC16_HW
+#ifdef ONE_DISPLAY
 #define HARDWARE_TYPE MD_MAX72XX::GENERIC_HW
 unsigned int MAX_DEVICES = 1;
+char number_of_display_segments[3] = "1"; //adition to WiFiManager setup
+#define MAX_FLIPCOUNT 11 // max flips before it shows date info
+#else
+#define HARDWARE_TYPE MD_MAX72XX::FC16_HW
+unsigned int MAX_DEVICES = 4;
+char number_of_display_segments[3] = "4"; //adition to WiFiManager setup
+#endif
+// define pin asingment of display control and pins on the MCU board
 #define CLK_PIN   D5
 #define DATA_PIN  D7
 #define CS_PIN    D3
-// using only one display has specific issues, e.g. clock are also scrolling
-#define ONE_DISPLAY
-#ifdef ONE_DISPLAY
-#define MAX_FLIPCOUNT 11
-#endif
 
 // TIMEZONE AND DLS SETUP
 TimeChangeRule CEST = { "CEST", Last, Sun, Mar, 2, 120 };     // Central European Summer Time
@@ -70,8 +84,8 @@ const int DOT_DELAY = 500;                   // dot blink speed
 
 // https://pjrp.github.io/MDParolaFontEditor
 // LED CLOCK MOVING SEMICOLON SYMBOLS
-uint8_t semi1[] = { 2, 24, 24 }; // semicolon
-uint8_t semi2[] = { 2, 36, 36 }; // longer semicolon
+uint8_t semi1[] = { 1, 24 }; // semicolon
+uint8_t semi2[] = { 1, 36 }; // longer semicolon
 uint8_t narrowSemicolon[] = { 2, 0x66, 0x66};  // narrow ':'
 uint8_t narrowDot[] = { 2, 0x60, 0x60};  // narrow '.'
 // CHRISTMASS EDITION
@@ -130,11 +144,13 @@ void setup()
   ptrToParola->setFont(CP437);
   ptrToParola->setIntensity(9);   // 0 = low, 15 = high
 
-  pinMode(A0, INPUT);
-
   messageSize = 100;
   clearMessage();
+  
+#ifdef HAS_AMBIENT
   pinMode(A0, INPUT_PULLUP);
+#endif   
+
   Serial.begin(115200);
   while (!Serial); // Needed for Leonardo only
   delay(250);
@@ -158,7 +174,7 @@ void setup()
   ptrToParola->addChar('&', tree);
   ptrToParola->addChar('%', ball);
   ptrToParola->setFont(CP437);
-  ptrToParola->setIntensity(15);
+  ptrToParola->setIntensity(MESSAGE_INTENSITY);
 
   //debugPrint(PRINT_TIME_TRUE, "UDP PORT", String(Udp.localPort()), NEWLINE_FALSE, 0);
   debugPrint(PRINT_TIME_FALSE, "NTP SERVER ADDRESS", String(ntp_server_adress), NEWLINE_FALSE, 0);
@@ -249,8 +265,6 @@ void loop() {
         textStr += ":";
         textStr += convertDigitsNoColon(m);
       }
-      intensity = 1;
-      ptrToParola->setIntensity(intensity);
 #else
       if (boolDot == true) {
         if (MAX_DEVICES <= 4) {
@@ -279,16 +293,18 @@ void loop() {
           textStr += convertDigitsNoColon(m);
           textStr += "$";
           textStr += convertDigitsNoColon(s);
-        }
-        intensity = map(analogRead(A0), 0, 1023, 0, 15);
-        intensity = constrain(intensity, 0, 15);
-        ptrToParola->setIntensity(intensity);
+        }        
       }
 #endif
-      for (i = 0; i < textStr.length(); i++) {
-        text[i] = textStr[i];
-      }
-      text[i] = '\0';
+#ifdef HAS_AMBIENT
+      intensity = map(analogRead(PR_PIN), 0, 1023, 0, 15);
+      intensity = constrain(intensity, 0, 15);
+      debugPrint(PRINT_TIME_TRUE, "TIME+A0", String(analogRead(PR_PIN)), NEWLINE_TRUE, 0);
+#else        
+      intensity = CLOCK_INTENSITY;  //default clock intensity
+#endif
+      ptrToParola->setIntensity(intensity);
+      textStr.toCharArray(text, textStr.length() + 1);
 #ifndef ONE_DISPLAY
       ptrToParola->displayText(text, PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
 #else
@@ -305,8 +321,9 @@ void loop() {
             flipCount = 0;
           }
         }
-        debugPrint(PRINT_TIME_TRUE, "TIME+", text, NEWLINE_TRUE, 0);
-        debugPrint(PRINT_TIME_TRUE, "TIME+", String(flipCount), NEWLINE_TRUE, 0);
+        debugPrint(PRINT_TIME_TRUE, "TIME+text", text, NEWLINE_TRUE, 0);
+        debugPrint(PRINT_TIME_TRUE, "TIME+flipCount", String(flipCount), NEWLINE_TRUE, 0);
+        debugPrint(PRINT_TIME_TRUE, "TIME+intensity", String(intensity), NEWLINE_TRUE, 0);
         flipCount++;
       }
 #endif
@@ -417,7 +434,7 @@ void mqttCallback(char* topic, byte * payload, unsigned int length) {
 
     debugPrint(PRINT_TIME_TRUE, "MARQUEE DEBUG", "--MARQUEE--", NEWLINE_TRUE, 2);
 
-    ptrToParola->setIntensity(15); // 0 = low, 15 = high
+    ptrToParola->setIntensity(MESSAGE_INTENSITY); 
     ptrToParola->displayClear();
 #ifdef ONE_DISPLAY
     ANIM_DELAY = 75;
@@ -430,7 +447,7 @@ void mqttCallback(char* topic, byte * payload, unsigned int length) {
 void clearMessage(void) {
   for (int i = 0; i < messageSize; i++) {
     message[i] = ' ';
-  }
+  } 
   messageSize = 0;
 }
 
